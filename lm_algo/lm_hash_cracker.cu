@@ -16,7 +16,7 @@ __constant__ unsigned int CHARSET_SIZE = HOST_CHARSET_SIZE;          // su gpu
 #include "des/des.cu"
 #include "useful/gpu_stats.cu"
 
-__host__ void toUpper(char *str) {
+__host__ void toUpper(char* str) {
     while (*str) {
         if (*str >= 'a' && *str <= 'z') {
             *str -= ('a' - 'A');
@@ -29,7 +29,7 @@ __host__ bool checkHEXRange(char ch) {
     return (ch >= 0x30 && ch <= 0x39) || (ch >= 0x41 && ch <= 0x46) || (ch >= 0x61 && ch <= 0x66);
 }
 
-__host__ bool checkValidHash(char *toCrack) {
+__host__ bool checkValidHash(char* toCrack) {
     if (!toCrack || strlen(toCrack) != 32) {
         return false;
     }
@@ -51,7 +51,6 @@ __host__ bool checkValidHash(char *toCrack) {
 // come parita', nell'LM vengono invcece ignorati) il bit ignorato per ogni byte
 // e' l'ultimo ottavo bit meno significativo (a destra)
 __device__ void bytes_to_des_key(const uint8_t raw_7_bytes[7], uint8_t key_out[8]) {
-
     // preparo un nuovo indirizzo a 64 bit per contenere tutti i 64 bit in una
     // locazione sola ma b contiene solo 56 bit
     uint64_t b = 0;
@@ -73,13 +72,13 @@ __device__ void bytes_to_des_key(const uint8_t raw_7_bytes[7], uint8_t key_out[8
 }
 
 // Convert a hex string to raw bytes
-__host__ void hex_to_bytes(const char *hex_str, uint8_t *bytes_out, size_t num_bytes) {
+__host__ void hex_to_bytes(const char* hex_str, uint8_t* bytes_out, size_t num_bytes) {
     for (size_t i = 0; i < num_bytes; i++) {
         sscanf(hex_str + 2 * i, "%02hhx", &bytes_out[i]);
     }
 }
 
-__device__ void hash_half_fast(const char *candidate, unsigned int candidate_len, uint8_t output_block[8]) {
+__device__ void hash_half_fast(const char* candidate, unsigned int candidate_len, uint8_t output_block[8]) {
     uint8_t padded[7] = {0}; // Inizializzato a zero (padding automatico)
 
     for (size_t i = 0; i < candidate_len && i < 7; i++) {
@@ -146,7 +145,7 @@ found_match)) { return 1;
 // Questo garantisce che a indici diversi corrispondano sempre stringhe diverse,
 // permettendo a migliaia di core della GPU di lavorare in parallelo senza
 // duplicare il lavoro o causare stack overflow da ricorsione.
-__device__ void indexToCandidate(uint64_t index, int len, char *out_str) {
+__device__ void indexToCandidate(uint64_t index, int len, char* out_str) {
     // Da destra a sinistra
     for (int i = len - 1; i >= 0; i--) {
         out_str[i] = FULL_CHARSET[index % CHARSET_SIZE]; // Carattere in base alla posizione
@@ -196,8 +195,8 @@ Lunghezza della password attualmente sotto test (1-7) int *found_flag // [6]
 Flag intero condiviso per segnalare il successo
 )
 */
-__global__ void crackHalfKernel(const uint8_t target_bytes[8], char *cracked_out, uint64_t start_index,
-                                uint64_t total_work, unsigned int candidate_len, unsigned int *found_flag) {
+__global__ void crackHalfKernel(const uint8_t target_bytes[8], char* cracked_out, uint64_t start_index,
+                                uint64_t total_work, unsigned int candidate_len, unsigned int* found_flag) {
     // Calcolo dell'ID globale del thread
     uint64_t gid = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
     uint64_t idx = start_index + gid; // indice assoluto nel range [start_index, total_work-1]
@@ -224,7 +223,7 @@ __global__ void crackHalfKernel(const uint8_t target_bytes[8], char *cracked_out
     // check against known target
     // (memcmp(candidate_block, target_bytes, 8) == 0) // non disponibile
     // Casto sia candidate_block che target_bytes a uint64_t* e dereferenzio
-    if (*reinterpret_cast<const uint64_t *>(candidate_block) == *reinterpret_cast<const uint64_t *>(target_bytes)) {
+    if (*reinterpret_cast<const uint64_t*>(candidate_block) == *reinterpret_cast<const uint64_t*>(target_bytes)) {
         // scrive trovato se non e' gia' stato fatto da un altro thread, dubbio,
         // impossibile che l'abbia trovato un altro thread, avrebbe indice diverso?
         if (atomicExch(found_flag, 1u) == 0) {
@@ -240,19 +239,19 @@ __global__ void crackHalfKernel(const uint8_t target_bytes[8], char *cracked_out
     return;
 }
 
-__host__ void splitHash(const char *hash_hex, uint8_t target1[8], uint8_t target2[8]) {
+__host__ void splitHash(const char* hash_hex, uint8_t target1[8], uint8_t target2[8]) {
     hex_to_bytes(hash_hex, target1, 8);
     hex_to_bytes(hash_hex + 16, target2, 8);
 }
 
-__host__ bool checkIfFound(unsigned int *foundFlag1, unsigned int *foundFlag2, unsigned int *h_flag1,
-                           unsigned int *h_flag2) {
+__host__ bool checkIfFound(unsigned int* foundFlag1, unsigned int* foundFlag2, unsigned int* h_flag1,
+                           unsigned int* h_flag2) {
     cudaMemcpy(h_flag1, foundFlag1, sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(h_flag2, foundFlag2, sizeof(int), cudaMemcpyDeviceToHost);
     return (*h_flag1 == 1) && (*h_flag2 == 1);
 }
 
-__global__ void testDES(uint8_t *output) {
+__global__ void testDES(uint8_t* output) {
     // Simula la chiave per "TEST" (7 byte: T,E,S,T,0,0,0)
     uint8_t raw_key[7] = {'T', 'E', 'S', 'T', 0, 0, 0};
     uint8_t key[8];
@@ -268,9 +267,8 @@ __global__ void testDES(uint8_t *output) {
         output[i] = cipher[i];
 }
 
-__host__ void cleanGPU(uint8_t *target1GPU, uint8_t *target2GPU, char *crackedPassword1GPU, char *crackedPassword2GPU,
-                       unsigned int *foundFlag1, unsigned int *foundFlag2) {
-
+__host__ void cleanGPU(uint8_t* target1GPU, uint8_t* target2GPU, char* crackedPassword1GPU, char* crackedPassword2GPU,
+                       unsigned int* foundFlag1, unsigned int* foundFlag2) {
     cudaFree(target1GPU);
     cudaFree(target2GPU);
     cudaFree(crackedPassword1GPU);
@@ -279,7 +277,7 @@ __host__ void cleanGPU(uint8_t *target1GPU, uint8_t *target2GPU, char *crackedPa
     cudaFree(foundFlag2);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     /*
       uint8_t *dev_output;
       cudaMalloc(&dev_output, 8);
@@ -298,7 +296,7 @@ int main(int argc, char **argv) {
         return -1;
       }
     */
-    char *toCrack = argv[1];
+    char* toCrack = argv[1];
 
     if (!checkValidHash(toCrack)) {
         printf("[ERR] Provided hash seem a not valid LM HASH\n");
@@ -379,8 +377,8 @@ int main(int argc, char **argv) {
     printf("[Debug] "
            "================================================================== \n");
     cudaStream_t stream1,
-        stream2; // 2 stream uno per ogni meta' di hash viene gestito in
-                 // automatico dalla gpu, molto comodo
+            stream2; // 2 stream uno per ogni meta' di hash viene gestito in
+                     // automatico dalla gpu, molto comodo
     cudaStreamCreate(&stream1);
     cudaStreamCreate(&stream2);
 
