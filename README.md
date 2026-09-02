@@ -1,2 +1,2 @@
-# ProgettoPPE
+# ProgettoPPM
 Progetto Parallel Programming 
