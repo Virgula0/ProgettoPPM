@@ -6,10 +6,14 @@
 // su gpu
 __constant__ unsigned char MAGIC_CONSTANT[8] = {'K', 'G', 'S', '!',
                                                 '@', '#', '$', '%'};
-__constant__ char FULL_CHARSET[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ "; // analisi del caso peggiore => esecuzione dell'algoritmo con una password di 14 bytes contenente tutti spazi
+__constant__ char
+    FULL_CHARSET[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"#$%&'()*+,-./"
+        ":;<=>?@[\\]^_`{|}~ "; // analisi del caso peggiore => esecuzione
+                               // dell'algoritmo con una password di 14 bytes
+                               // contenente tutti spazi
 
-    constexpr unsigned int HOST_CHARSET_SIZE =
+constexpr unsigned int HOST_CHARSET_SIZE =
     sizeof(FULL_CHARSET) - 1; // -1 per il null byte
 __constant__ unsigned int CHARSET_SIZE = HOST_CHARSET_SIZE; // su gpu
 
@@ -46,28 +50,33 @@ __host__ bool checkValidHash(char *toCrack) {
   return true;
 }
 
-// la funzione serve per convertire la chiave da usare per il des in un input compatibile
-// des lavora con chiavi a 64 bits, ma solo 56 sono effettivamente usati per la chiave
-// viene scartato un bit per ogni byte (usati solitamente come parita', nell'LM vengono invcece ignorati)
-// il bit ignorato per ogni byte e' l'ultimo ottavo bit meno significativo (a destra)
+// la funzione serve per convertire la chiave da usare per il des in un input
+// compatibile des lavora con chiavi a 64 bits, ma solo 56 sono effettivamente
+// usati per la chiave viene scartato un bit per ogni byte (usati solitamente
+// come parita', nell'LM vengono invcece ignorati) il bit ignorato per ogni byte
+// e' l'ultimo ottavo bit meno significativo (a destra)
 __device__ void bytes_to_des_key(const uint8_t raw_7_bytes[7],
                                  uint8_t key_out[8]) {
 
-  // preparo un nuovo indirizzo a 64 bit per contenere tutti i 64 bit in una locazione sola 
-  // ma b contiene solo 56 bit
+  // preparo un nuovo indirizzo a 64 bit per contenere tutti i 64 bit in una
+  // locazione sola ma b contiene solo 56 bit
   uint64_t b = 0;
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 7; i++) {
-    b = (b << 8) | raw_7_bytes[i]; // shifto di 8 bit e concateno di volta in volta, easy fin qui
+    b = (b << 8) | raw_7_bytes[i]; // shifto di 8 bit e concateno di volta in
+                                   // volta, easy fin qui
   }
 
-  // per ogni byte droppo sempre quello in ultima posizione
-  // 0XFE = 11111110, l'ultimo bit e' 0
-  // il fatto e' che dobbiamo isolare 7 bit alla volta
-  #pragma unroll
-  for (int i=7; i>=0; i--) {
-    key_out[i] = (uint8_t)((b & 0x7F) << 1); // b & 0x7F prendo gli ultimi 7 bit, posi li sposto a sinistra di uno lasciando l'ultimo posto a 0
-    b = b >> 7; // leggo i prossimi 7 bit
+// per ogni byte droppo sempre quello in ultima posizione
+// 0XFE = 11111110, l'ultimo bit e' 0
+// il fatto e' che dobbiamo isolare 7 bit alla volta
+#pragma unroll
+  for (int i = 7; i >= 0; i--) {
+    key_out[i] =
+        (uint8_t)((b & 0x7F)
+                  << 1); // b & 0x7F prendo gli ultimi 7 bit, posi li sposto a
+                         // sinistra di uno lasciando l'ultimo posto a 0
+    b = b >> 7;          // leggo i prossimi 7 bit
   }
 }
 
@@ -262,7 +271,7 @@ __host__ bool checkIfFound(unsigned int *foundFlag1, unsigned int *foundFlag2,
 
 __global__ void testDES(uint8_t *output) {
   // Simula la chiave per "TEST" (7 byte: T,E,S,T,0,0,0)
-  uint8_t raw_key[7] = {'T', 'E', 'S', 'T',0, 0, 0};
+  uint8_t raw_key[7] = {'T', 'E', 'S', 'T', 0, 0, 0};
   uint8_t key[8];
   bytes_to_des_key(raw_key, key); // usa la tua funzione
   // Plaintext = MAGIC_CONSTANT
@@ -301,7 +310,7 @@ int main(int argc, char **argv) {
     printf("\n");
     printf("ATTESO 01FC5A6BE7BC6929\n");
     return 1;
-    
+
     if (argc < 2) {
       printf("[ERR] No cracking hash provided\n");
       return -1;
@@ -386,7 +395,8 @@ int main(int argc, char **argv) {
   printf("[Debug] - Thread per Blocco: %d\n", threadsPerBlock);
   printf(
       "[Debug] - MaxGrid dimension: %d. Importante! questo causava un bug con "
-      "le password lunghe 7 caratteri, perche' eccedevano il block size nelle combinazioni totali (69^7)\n",
+      "le password lunghe 7 caratteri, perche' eccedevano il block size nelle "
+      "combinazioni totali (69^7)\n",
       maxGridDimX);
   printf(
       "[Debug] "
