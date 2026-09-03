@@ -1,6 +1,9 @@
 #include <string.h>
 #include <time.h>
 
+#include "des/des.cu"
+#include "useful/gpu_stats.cu"
+
 // su gpu
 __constant__ unsigned char MAGIC_CONSTANT[8] = {'K', 'G', 'S', '!', '@', '#', '$', '%'};
 __constant__ char FULL_CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"#$%&'()*+,-./"
@@ -10,9 +13,6 @@ __constant__ char FULL_CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"#$%&'
 
 constexpr unsigned int HOST_CHARSET_SIZE = sizeof(FULL_CHARSET) - 1; // -1 per il null byte
 __constant__ unsigned int CHARSET_SIZE = HOST_CHARSET_SIZE;          // su gpu
-
-#include "des/des.cu"
-#include "useful/gpu_stats.cu"
 
 __host__ void toUpper(char* str) {
     while (*str) {
