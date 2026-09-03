@@ -5,6 +5,8 @@
 #include <omp.h>
 #include <functional> // Per std::hash
 #include <ctime>
+#include <cstdint> // Necessario per uint8_t
+#include <array>   // Necessario per std::array
 
 
 /*
@@ -13,6 +15,8 @@ OMP_PROC_BIND="spread"
 OMP_PLACES - non modificato
 ###################################################
 */
+
+constexpr size_t K_HASHES = 6;  // numero di funzioni hash
 
 // funzione di supporto per caricare le password da file .txt
 std::vector<std::string> load_passwords(const std::string& filename, size_t max_lines = 0) {
@@ -41,24 +45,22 @@ std::vector<std::string> load_passwords(const std::string& filename, size_t max_
 class BloomFilterPar { 
 private:
     size_t size; // custom size del bit array
-    std::vector<bool> bit_array; 
-    const size_t k = 6;  // numero di funzioni hash
+    std::vector<uint8_t> bit_array; 
 
     // restituisce k indici univoci per un dato elemento
-    std::vector<size_t> _hashes(const std::string& item) const {
-        std::vector<size_t> indices;
-        indices.reserve(k);
+    std::array<size_t, K_HASHES> _hashes(const std::string& item) const {
+        std::array<size_t, K_HASHES> indices;
         std::string salted_input;
         size_t hash_val;
 
     
-        for (size_t i = 0; i < k; ++i) {
+        for (size_t i = 0; i < K_HASHES; ++i) {
             salted_input = std::to_string(i) + ":" + item; // crea un input unico per ogni iterazione
 
             hash_val = std::hash<std::string>{}(salted_input);
 
             size_t index = hash_val % size; // modulo per rientrare nel range dell'array [0, size - 1]
-            indices.push_back(index);
+            indices[i] = index;
         }
     
         return indices;
@@ -67,14 +69,14 @@ private:
 public:
     // costruttore che inizializza il vettore alla dimensione desiderata con tutti bit a false
     explicit BloomFilterPar(size_t size) 
-        : size(size), bit_array(size, false) {}
+        : size(size), bit_array(size, 0) {}
 
     void add_from_file(const std::vector<std::string>& items) {
         #pragma omp parallel num_threads(omp_get_max_threads())
-        #pragma omp for schedule(static)
+        #pragma omp for schedule(dynamic)
         for(size_t i = 0; i < items.size(); ++i){
             for (size_t index : _hashes(items[i])) { // imposta a True tutti i bit ritornati dalla funzione _hashes
-                bit_array[index] = true;
+                bit_array[index] = 1;
             }
         }
     }
@@ -95,10 +97,9 @@ public:
     // verifica la presenza della password analizzando i suoi 3 bit associati
     bool contains(const std::string& item) const {
         bool flg = true; // flag per indicare se una password è presente o meno
-        //#pragma omp parallel for schedule(static)
         for (size_t index : _hashes(item)) {
             // Se anche solo un bit è false, l'elemento NON è mai stato inserito
-            if (!bit_array[index]) {
+            if (bit_array[index] == 0) {
                 flg = false;
                 break;
             }
@@ -114,21 +115,19 @@ public:
 class BloomFilterSeq { 
 private:
     size_t size; // custom size del bit array
-    std::vector<bool> bit_array;
-    const size_t k = 6;  // numero di funzioni hash
+    std::vector<uint8_t> bit_array;
 
     // genera k indici univoci per un dato elemento
-    std::vector<size_t> _hashes(const std::string& item) const {
-        std::vector<size_t> indices;
-        indices.reserve(k);
+    std::array<size_t, K_HASHES> _hashes(const std::string& item) const {
+        std::array<size_t, K_HASHES> indices;
 
-        for (size_t i = 0; i < k; ++i) {
+        for (size_t i = 0; i < K_HASHES; ++i) {
             std::string salted_input = std::to_string(i) + ":" + item; // crea un input unico per ciascuna iterazione
 
             size_t hash_val = std::hash<std::string>{}(salted_input);
 
             size_t index = hash_val % size; // Modulo per rientrare nel range dell'array [0, size - 1]
-            indices.push_back(index);
+            indices[i] = index;
             
         }
         return indices;
@@ -137,17 +136,17 @@ private:
 public:
     // costruttore che inizializza il vettore alla dimensione indicata con tutti bit a false
     explicit BloomFilterSeq(size_t size) 
-        : size(size), bit_array(size, false) {}
+        : size(size), bit_array(size, 0) {}
 
     void add(const std::string& item) {
         for (size_t index : _hashes(item)) { // imposta a True i bit agli indici ritornati dalla funzione _hashes
-            bit_array[index] = true;
+            bit_array[index] = 1;
         }
     }
 
     bool contains(const std::string& item) const {
         for (size_t index : _hashes(item)) {
-            if (!bit_array[index]) {
+            if (bit_array[index] == 0) {
                 return false;
             }
         }
