@@ -6,6 +6,7 @@
 #include <functional> // Per std::hash
 #include <ctime>
 
+
 /*
 ###################################################
 OMP_PROC_BIND="spread"
@@ -13,7 +14,7 @@ OMP_PLACES - non modificato
 ###################################################
 */
 
-// Funzione di supporto per caricare le password dal file rockyou.txt
+// funzione di supporto per caricare le password da file .txt
 std::vector<std::string> load_passwords(const std::string& filename, size_t max_lines = 0) {
     std::vector<std::string> passwords;
     std::ifstream file(filename);
@@ -26,7 +27,7 @@ std::vector<std::string> load_passwords(const std::string& filename, size_t max_
     std::string line;
     while (std::getline(file, line)) {
         if (!line.empty()) {
-            // Rimuove l'eventuale carattere '\r' da file formattati in Windows
+            // Rimuove l'eventuale carattere '\r' da file formattati in windows
             if (line.back() == '\r') line.pop_back();
             passwords.push_back(line);
             if (max_lines > 0 && passwords.size() >= max_lines) break;
@@ -41,7 +42,7 @@ class BloomFilterPar {
 private:
     size_t size; // custom size del bit array
     std::vector<bool> bit_array; 
-    const size_t k = 6;          // numero di funzioni hash
+    const size_t k = 6;  // numero di funzioni hash
 
     // restituisce k indici univoci per un dato elemento
     std::vector<size_t> _hashes(const std::string& item) const {
@@ -69,8 +70,8 @@ public:
         : size(size), bit_array(size, false) {}
 
     void add_from_file(const std::vector<std::string>& items) {
-        #pragma omp parallel
-        #pragma omp for schedule(static) 
+        #pragma omp parallel num_threads(omp_get_max_threads())
+        #pragma omp for schedule(static)
         for(size_t i = 0; i < items.size(); ++i){
             for (size_t index : _hashes(items[i])) { // imposta a True tutti i bit ritornati dalla funzione _hashes
                 bit_array[index] = true;
@@ -81,8 +82,8 @@ public:
     // ricerca di un batch di password nel Bloom Filter 
     size_t contains_from_file(const std::vector<std::string>& items) const {
         size_t count = 0;
-        #pragma omp parallel
-        #pragma omp for schedule(dynamic) reduction(+ : count)
+        #pragma omp parallel num_threads(omp_get_max_threads())
+        #pragma omp for schedule(dynamic) reduction(+ : count) 
         for (size_t i = 0; i < items.size(); ++i) {
             if (contains(items[i])) {
                 count++;
@@ -98,16 +99,10 @@ public:
         for (size_t index : _hashes(item)) {
             // Se anche solo un bit è false, l'elemento NON è mai stato inserito
             if (!bit_array[index]) {
-                /*#pragma omp critical
-                {
-                    flg = false;
-                }
-                #pragma omp cancel for // se anche un solo bit è True non c'è bisogno di confrontare gli altri, si interrompe il ciclo*/
                 flg = false;
                 break;
             }
         }
-        //#pragma cancellation point for // punto di ritrovo per gli altri threads che analizzano una password (che potrebbe essere) presente
         return flg;
     }
 };
@@ -163,22 +158,23 @@ public:
 int main() {
     const std::string filename = "rockyou.txt";
     const std::string ctrl_filename = "1_million_passwords.txt";
+
     size_t filter_size = 143443800;
+
     std::vector<std::string> passwords;
     std::vector<std::string> ctrl_passwords;
 
-    double tot_add_time_par = 0;
-    double tot_add_time_seq = 0;
+    int num_cycles = 5;
 
-    double tot_srch_time_par = 0;
-    double tot_srch_time_seq = 0;
+    double tot_add_time_par = 0, tot_add_time_seq = 0;
 
-    double tot_speed_up_add = 0;
-    double tot_cycles = 0;
-    double tot_speed_up_srch = 0;
+    double tot_srch_time_par = 0, tot_srch_time_seq = 0;
 
-    double tot_eff_add = 0;
-    double tot_eff_srch = 0;
+    double tot_speed_up_add = 0, tot_speed_up_srch = 0;
+
+    double tot_eff_add = 0, tot_eff_srch = 0;
+
+    int num_threads = omp_get_max_threads();
  
     std::cout << "Caricamento password da '" << filename << "'...\n";
     passwords = load_passwords(filename, 0);
@@ -202,56 +198,68 @@ int main() {
 
     std::cout << "Caricate " << ctrl_passwords.size() << " password.\n\n";
 
-    for(int i = 0; i < 5; i++){
+    for(int i = 0; i < num_cycles; i++){
+
+        double time_add_par = 0, time_add_par_cpu = 0; 
+        double start_add_par = 0, start_srch_par = 0;
+        double time_srch_par_cpu = 0, time_srch_par = 0;
+
+        double start_add_seq = 0, start_srch_seq = 0;
+        double time_add_seq = 0, time_add_seq_cpu = 0;
+        double time_srch_seq_cpu = 0, time_srch_seq = 0;
+
+        double speedup_add = 0, speedup_srch = 0;
+        double eff_add = 0, eff_srch = 0;
+
+        std::clock_t start_add_par_cpu, start_srch_par_cpu, start_add_seq_cpu, start_srch_seq_cpu;
 
         BloomFilterPar bloom(filter_size);
 
         // Inserimento elementi
-        double start_add_par = omp_get_wtime();
-        std::clock_t start_add_par_cpu = std::clock();
+        start_add_par = omp_get_wtime();
+        start_add_par_cpu = std::clock();
 
         bloom.add_from_file(passwords);
 
-        int num_threads = omp_get_max_threads();
-
-        double time_add_par = omp_get_wtime() - start_add_par;
-        double time_add_par_cpu = double(std::clock() - start_add_par_cpu) / CLOCKS_PER_SEC;
+        time_add_par = omp_get_wtime() - start_add_par;
+        time_add_par_cpu = double(std::clock() - start_add_par_cpu) / CLOCKS_PER_SEC;
 
         // Test di verifica
-        double start_con_par = omp_get_wtime();
-        std::clock_t start_srch_par_cpu = std::clock();
+        start_srch_par = omp_get_wtime();
+        start_srch_par_cpu = std::clock();
 
         size_t res_par = bloom.contains_from_file(ctrl_passwords);
 
-        double time_srch_par_cpu = double(std::clock() - start_srch_par_cpu) / CLOCKS_PER_SEC;
-        double time_con_par = omp_get_wtime() - start_con_par;
+        time_srch_par_cpu = double(std::clock() - start_srch_par_cpu) / CLOCKS_PER_SEC;
+        time_srch_par = omp_get_wtime() - start_srch_par;
 
         BloomFilterSeq bloom_seq(filter_size);
 
-        double start_seq_add = omp_get_wtime();
-        std::clock_t start_add_seq_cpu = std::clock();
+        start_add_seq = omp_get_wtime();
+        start_add_seq_cpu = std::clock();
+
         for (const auto& pwd : passwords) {
             bloom_seq.add(pwd);
         }
 
-        double time_seq_add = omp_get_wtime() - start_seq_add;
-        double time_add_seq_cpu = double(std::clock() - start_add_seq_cpu) / CLOCKS_PER_SEC;
+        time_add_seq = omp_get_wtime() - start_add_seq;
+        time_add_seq_cpu = double(std::clock() - start_add_seq_cpu) / CLOCKS_PER_SEC;
 
-        double start_seq_query = omp_get_wtime();
-        std::clock_t start_srch_seq_cpu = std::clock();
+        start_srch_seq = omp_get_wtime();
+        start_srch_seq_cpu = std::clock();
 
         size_t found_seq = 0;
         for (const auto& pwd : ctrl_passwords) {
             if (bloom_seq.contains(pwd)) found_seq++;
         }
 
-        double time_srch_seq_cpu = double(std::clock() - start_srch_seq_cpu) / CLOCKS_PER_SEC;
-        double time_seq_query = omp_get_wtime() - start_seq_query;
+        time_srch_seq_cpu = double(std::clock() - start_srch_seq_cpu) / CLOCKS_PER_SEC;
+        time_srch_seq = omp_get_wtime() - start_srch_seq;
 
-        double speedup_add = time_seq_add / time_add_par;
-        double speedup_srch = time_seq_query / time_con_par;
-        double eff_add = speedup_add / num_threads;
-        double eff_srch = speedup_srch / num_threads;
+        speedup_add = time_add_seq / time_add_par;
+        speedup_srch = time_srch_seq / time_srch_par;
+        eff_add = speedup_add / num_threads;
+        eff_srch = speedup_srch / num_threads;
 
         std::cout << "CICLO SPERIMENTALE NUMERO " << i + 1 << "\n\n";
 
@@ -260,7 +268,7 @@ int main() {
         std::cout << "Policy Attiva: " << omp_get_proc_bind() << "\n\n";
 
         std::cout << "=== INSERIMENTO (ADD) ===\n";
-        std::cout << "Tempo Sequenziale: " << time_seq_add << " s\n";
+        std::cout << "Tempo Sequenziale: " << time_add_seq << " s\n";
         std::cout << "Tempo Parallelo:   " << time_add_par << " s\n";
         std::cout << "Tempo CPU Sequenziale: " << time_add_seq_cpu << " s\n";
         std::cout << "Tempo CPU Parallelo:   " << time_add_par_cpu << " s\n";
@@ -268,8 +276,8 @@ int main() {
         std::cout << "Efficiency:   " << eff_add * 100 << "%\n\n";
 
         std::cout << "=== RICERCA (CONTAINS) ===\n";
-        std::cout << "Tempo Sequenziale: " << time_seq_query << " s\n";
-        std::cout << "Tempo Parallelo:   " << time_con_par << " s\n";
+        std::cout << "Tempo Sequenziale: " << time_srch_seq << " s\n";
+        std::cout << "Tempo Parallelo:   " << time_srch_par << " s\n";
         std::cout << "Tempo CPU Sequenziale: " << time_srch_seq_cpu << " s\n";
         std::cout << "Tempo CPU Parallelo:   " << time_srch_par_cpu << " s\n";
         std::cout << "Speedup Ricerca:   " << speedup_srch << "x\n";
@@ -278,31 +286,30 @@ int main() {
         std::cout << "Verifica correttezza (elementi trovati Seq vs Par): " 
                     << found_seq << " / " << res_par << "\n\n";
 
-        tot_add_time_seq += time_seq_add;
+        tot_add_time_seq += time_add_seq;
         tot_add_time_par += time_add_par;
 
-        tot_srch_time_seq += time_seq_query;
-        tot_srch_time_par += time_con_par;
+        tot_srch_time_seq += time_srch_seq;
+        tot_srch_time_par += time_srch_par;
 
         tot_speed_up_add += speedup_add;
         tot_speed_up_srch += speedup_srch;
 
         tot_eff_add += eff_add;
         tot_eff_srch += eff_srch;
-        tot_cycles += 1;
     }
 
     std::cout << "=== RISULTATI FINALI ADD (MEDIA) ===\n\n";
-    std::cout << "Tempo Medio Sequenziale: " << tot_add_time_seq / tot_cycles << "s \n";
-    std::cout << "Tempo Medio Parallelo: " << tot_add_time_par / tot_cycles << "s \n";
-    std::cout << "Speedup Medio: " << tot_speed_up_add / tot_cycles << "x \n";
-    std::cout << "Effeciency Media: " << (tot_eff_add / tot_cycles) * 100 << "\n";
+    std::cout << "Tempo Medio Sequenziale: " << tot_add_time_seq / num_cycles << "s \n";
+    std::cout << "Tempo Medio Parallelo: " << tot_add_time_par / num_cycles << "s \n";
+    std::cout << "Speedup Medio: " << tot_speed_up_add / num_cycles << "x \n";
+    std::cout << "Effeciency Media: " << (tot_eff_add / num_cycles) * 100 << "\n";
 
     std::cout << "=== RISULTATI FINALI CONTAINS (MEDIA) ===\n\n";
-    std::cout << "Tempo Medio Sequenziale: " << tot_srch_time_seq / tot_cycles << "s \n";
-    std::cout << "Tempo Medio Parallelo: " << tot_srch_time_par / tot_cycles << "s \n";
-    std::cout << "Speedup Medio: " << tot_speed_up_srch / tot_cycles << "x \n";
-    std::cout << "Effeciency Media: " << (tot_eff_srch / tot_cycles) * 100 << "\n";
+    std::cout << "Tempo Medio Sequenziale: " << tot_srch_time_seq / num_cycles << "s \n";
+    std::cout << "Tempo Medio Parallelo: " << tot_srch_time_par / num_cycles << "s \n";
+    std::cout << "Speedup Medio: " << tot_speed_up_srch / num_cycles << "x \n";
+    std::cout << "Effeciency Media: " << (tot_eff_srch / num_cycles) * 100 << "\n";
     
     return 0;
 }
