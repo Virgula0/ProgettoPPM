@@ -251,11 +251,12 @@ __host__ bool checkIfFound(unsigned int* foundFlag1, unsigned int* foundFlag2, u
     return (*h_flag1 == 1) && (*h_flag2 == 1);
 }
 
+/*
 __global__ void testDES(uint8_t* output) {
     // Simula la chiave per "TEST" (7 byte: T,E,S,T,0,0,0)
     uint8_t raw_key[7] = {'T', 'E', 'S', 'T', 0, 0, 0};
     uint8_t key[8];
-    bytes_to_des_key(raw_key, key); // usa la tua funzione
+    bytes_to_des_key(raw_key, key); // usa la funzione
     // Plaintext = MAGIC_CONSTANT
     uint8_t plain[8];
     for (int i = 0; i < 8; i++)
@@ -266,6 +267,7 @@ __global__ void testDES(uint8_t* output) {
     for (int i = 0; i < 8; i++)
         output[i] = cipher[i];
 }
+*/
 
 __host__ void cleanGPU(uint8_t* target1GPU, uint8_t* target2GPU, char* crackedPassword1GPU, char* crackedPassword2GPU,
                        unsigned int* foundFlag1, unsigned int* foundFlag2) {
@@ -279,6 +281,7 @@ __host__ void cleanGPU(uint8_t* target1GPU, uint8_t* target2GPU, char* crackedPa
 
 int main(int argc, char** argv) {
     /*
+      // debug algoritmo des per correttezza
       uint8_t *dev_output;
       cudaMalloc(&dev_output, 8);
       testDES<<<1,1>>>(dev_output);
