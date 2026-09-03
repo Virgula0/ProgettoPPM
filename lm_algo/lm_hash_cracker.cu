@@ -156,8 +156,8 @@ __device__ void indexToCandidate(uint64_t index, int len, char* out_str) {
 
 // compara i due blocchi per capire se l'hash da craccare coincide con l'hash generato dal des
 __device__ bool compareEqualBytes(uint8_t candidate_block[8], const uint8_t target_bytes[8]) {
-    #pragma unroll
-    for (uint8_t i=0; i<8; i++) {
+#pragma unroll
+    for (uint8_t i = 0; i < 8; i++) {
         if (candidate_block[i] != target_bytes[i]) {
             return false;
         }
@@ -288,6 +288,25 @@ __host__ void cleanGPU(uint8_t* target1GPU, uint8_t* target2GPU, char* crackedPa
     cudaFree(foundFlag2);
 }
 
+__host__ char* text_to_hex_str(const char* text_in, size_t text_len) {
+    char* hex_str_out = (char*)malloc(2 + (sizeof(char) * (text_len * 2)) + 1);
+    hex_str_out[0] = '0';
+    hex_str_out[1] = 'x';
+    for (size_t i = 0; i < text_len; i++) {
+        // %02X o %02x converte il singolo char nel suo equivalente hex a 2 cifre
+        sprintf(hex_str_out + 2 + (2 * i), "%02X", (unsigned char)text_in[i]);
+    }
+    // Aggiunge il terminatore di stringa finale '\0'
+    hex_str_out[2 + (text_len * 2)] = '\0';
+    return hex_str_out;
+}
+
+__host__ double elapsed_seconds(struct timespec start, struct timespec end) {
+    // calcola il wall-clock time, CPU + GPU overhead, tempo reale ed effetttivo impiegato 
+    // dall'algoritmo senza trucchi
+    return (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+}
+
 int main(int argc, char** argv) {
     /*
       // debug algoritmo des per correttezza
@@ -395,7 +414,8 @@ int main(int argc, char** argv) {
     cudaStreamCreate(&stream1);
     cudaStreamCreate(&stream2);
 
-    clock_t startTime = clock();
+    struct timespec startTime, endTime;
+    clock_gettime(CLOCK_MONOTONIC, &startTime); // CLOCK_MONOTONIC  non e' soggetto al datetime locale, tempo puro
     nvmlDevice_t nvmlDevice;
     bool nvmlReady = initNVML(&nvmlDevice);
 
@@ -502,8 +522,14 @@ int main(int argc, char** argv) {
         printf("[DEBUG] Crackata prima meta'? [%d]. Crackata seconda meta'? [%d] "
                "(0 = no, 1 = si)\n",
                h_flag1, h_flag2);
-        printf("[DEBUG] Elapsed %.4f seconds\n", ((double)(clock() - startTime) / CLOCKS_PER_SEC));
+
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        printf("[DEBUG] Elapsed %.4f seconds\n", elapsed_seconds(startTime, now));
     }
+
+    // Time taken
+    clock_gettime(CLOCK_MONOTONIC, &endTime);
 
     if (nvmlReady) {
         nvmlShutdown();
@@ -512,9 +538,6 @@ int main(int argc, char** argv) {
     // Pulizia stream
     cudaStreamDestroy(stream1);
     cudaStreamDestroy(stream2);
-
-    // Time taken
-    clock_t endTime = clock();
 
     if (!h_flag1 && !h_flag2) {
         printf("ERROR: PASSWORD NOT FOUND\n");
@@ -533,8 +556,9 @@ int main(int argc, char** argv) {
     // Concatenate results
     sprintf(crackedPassword, "%s%s", crackedFirstPart, crackedSecondPart);
     crackedPassword[16] = '\0';
-    double time_taken = (double)(endTime - startTime) / CLOCKS_PER_SEC;
+    double time_taken = elapsed_seconds(startTime, endTime);
     printf("\n[!] Success! Cracked Password: %s\n", crackedPassword);
+    printf("[DEBUG] Hex version of cracked string: %s\n", (text_to_hex_str(crackedPassword, strlen(crackedPassword))));
     printf("[!] Taken %.4f seconds\n", time_taken);
     cleanGPU(target1GPU, target2GPU, crackedPassword1GPU, crackedPassword2GPU, foundFlag1, foundFlag2);
 }
