@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Binaries
+./bloom_filter_assignment/bloom_filter_test_c
+
 # C extensions
 *.so
 

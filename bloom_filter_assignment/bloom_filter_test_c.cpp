@@ -163,7 +163,7 @@ int main() {
     std::vector<std::string> passwords;
     std::vector<std::string> ctrl_passwords;
 
-    int num_cycles = 5;
+    int num_cycles = 25;
 
     double tot_add_time_par = 0, tot_add_time_seq = 0;
 
