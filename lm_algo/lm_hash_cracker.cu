@@ -293,12 +293,13 @@ int main(int argc, char** argv) {
       printf("\n");
       printf("ATTESO 01FC5A6BE7BC6929\n");
       return 1;
+    */
 
-      if (argc < 2) {
+    if (argc < 2) {
         printf("[ERR] No cracking hash provided\n");
         return -1;
-      }
-    */
+    }
+    
     char* toCrack = argv[1];
 
     if (!checkValidHash(toCrack)) {
