@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <string.h>
 #include <time.h>
 
@@ -153,6 +154,17 @@ __device__ void indexToCandidate(uint64_t index, int len, char* out_str) {
     out_str[len] = '\0';
 }
 
+// compara i due blocchi per capire se l'hash da craccare coincide con l'hash generato dal des
+__device__ bool compareEqualBytes(uint8_t candidate_block[8], const uint8_t target_bytes[8]) {
+    #pragma unroll
+    for (uint8_t i=0; i<8; i++) {
+        if (candidate_block[i] != target_bytes[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /*
  * ARCHITETTURA DI PARALLELIZZAZIONE E DISTRIBUZIONE DEL LAVORO SU GPU:
  *
@@ -219,9 +231,8 @@ __global__ void crackHalfKernel(const uint8_t target_bytes[8], char* cracked_out
     hash_half_fast(candidate, candidate_len, candidate_block);
 
     // check against known target
-    // (memcmp(candidate_block, target_bytes, 8) == 0) // non disponibile
-    // Casto sia candidate_block che target_bytes a uint64_t* e dereferenzio
-    if (*reinterpret_cast<const uint64_t*>(candidate_block) == *reinterpret_cast<const uint64_t*>(target_bytes)) {
+    // (memcmp(candidate_block, target_bytes, 8) == 0) // non disponibile su gpu
+    if (compareEqualBytes(candidate_block, target_bytes)) {
         // scrive trovato se non e' gia' stato fatto da un altro thread, dubbio,
         // impossibile che l'abbia trovato un altro thread, avrebbe indice diverso?
         if (atomicExch(found_flag, 1u) == 0) {
