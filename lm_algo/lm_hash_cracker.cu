@@ -1,5 +1,3 @@
-#include <cuda_runtime.h>
-#include <stdint.h>
 #include <string.h>
 #include <time.h>
 
@@ -299,7 +297,7 @@ int main(int argc, char** argv) {
         printf("[ERR] No cracking hash provided\n");
         return -1;
     }
-    
+
     char* toCrack = argv[1];
 
     if (!checkValidHash(toCrack)) {
