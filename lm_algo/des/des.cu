@@ -32,6 +32,7 @@ __constant__ const uint8_t P_TABLE[32] = {16, 7, 20, 21, 29, 12, 28, 17, 1,  15,
                                           2,  8, 24, 14, 32, 27, 3,  9,  19, 13, 30, 6,  22, 11, 4,  25};
 
 // Composed by S1, S2, implements the selection function
+// per qualche motivo se metto __constant__ le S_BOXES ci sono netti cali di prestazioni da parte della GPU
 __device__ const uint8_t S_BOXES[8][4][16] = {
         // S1
         {{14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7},
@@ -86,7 +87,7 @@ __device__ __forceinline__ uint64_t permute(uint64_t input, const uint8_t* table
     for (int i = 0; i < out_bits; i++) {
         uint8_t pos_src = table[i] - 1;
         unsigned int shift_in = (in_bits - 1) - pos_src;
-        uint64_t bit = (input >> shift_in) & 1ULL; // 1uLL un uno a 64 bit
+        uint64_t bit = (input >> shift_in) & 1ULL; // 1uLL un uno a 64 bit 000000 .... 00001
         unsigned int shift_out = (out_bits - 1) - i;
         out = (bit << shift_out) | out; // oppure |= (bit << shift_out)
     }
@@ -94,28 +95,30 @@ __device__ __forceinline__ uint64_t permute(uint64_t input, const uint8_t* table
 }
 
 // generate_subkeys rappresenta la Key schedule calculation
-__device__ __forceinline__ void generate_subkeys(uint64_t key64, uint64_t subkeys[16]) {
-    // Permutazione PC1 per passare da 64 a 56 bit
-    uint64_t bit_56_key = permute(key64, PC1_TABLE, 56, 64);
-
-    // Registri da 28 bit ciascuno (invece degli array C[17] e D[17])
-    uint32_t C = (bit_56_key >> 28) & 0x0FFFFFFF;
-    uint32_t D = bit_56_key & 0x0FFFFFFF;
-
-#pragma unroll
-    for (int i = 0; i < 16; i++) {
-        uint8_t n_shift = SHIFTS[i];
-
-        // Shift circolare a sinistra di n_shift posizioni sui 28 bit significativi
-        C = ((C << n_shift) | (C >> (28 - n_shift))) & 0x0FFFFFFF;
-        D = ((D << n_shift) | (D >> (28 - n_shift))) & 0x0FFFFFFF;
-
-        // Concatenazione dei due blocchi da 28 bit in un unico blocco da 56 bit
-        uint64_t CD = ((uint64_t)C << 28) | D;
-
-        // Permutazione PC2 per ottenere la subkey a 48 bit
-        subkeys[i] = permute(CD, PC2_TABLE, 48, 56);
-    }
+__device__ __forceinline__ uint64_t generate_subkey(int shift_index, uint32_t *D, uint32_t *C) {
+    // il numero di shift avviene in base al numero di feistel round (ovvero 16)
+    // adesso applichiamo una circular left operation su C e su D
+    // For Feistel round 1, 2, 9, and 16 both halves (left and right) undergo 1-bit left shift operation. 
+    // For others rounds (3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15) the halves undergo 2-bit left shift operation. 
+    // La tabell shifts e' la lookup table per eseguire il numero di shift necessario
+    uint8_t shift_to_apply = SHIFTS[shift_index];
+    // ad entrambe le meta'
+    // circular shift
+    // Vuol dire che shiftato in bit (o 2 bit a sinistra vengono) vengono rimessi sul fondo
+    // uint32_t get_first_elements_mask = shift_to_apply == 1 ? 0x8000000 : 0xC000000; // se 1 e' lo shift allora maschera sara' 1000000000000000000000000000 altrimenti 1100000000000000000000000000
+    // uint32_t drop_first_elements_mask = shift_to_apply == 1 ? 0x7FFFFFF : 0x3FFFFFF; // se 1 e' applichiamo la mashera 0111111111111111111111111111 altrimenti 0011111111111111111111111111
+    // *D = ((*D & drop_first_elements_mask) << shift_to_apply) | ((*D & get_first_elements_mask) >> (28 - shift_to_apply)); // prima applico lo shift a sinistra ma poi devo reinserire quei bit in fondo 
+    // *C = ((*C & drop_first_elements_mask) << shift_to_apply) | ((*C & get_first_elements_mask) >> (28 - shift_to_apply));
+    // il ragionamento delle righe precedenti era corretto ma posso semplificare, ci sono delle branch decision: bad per la gpu 
+    // infatti posso prima shiftare di shift_to_apply e poi applicare la maschera 1111111111111111111111111111 per prendere i 28 bits tutto alla fine
+    // in questo modo non ho bisogno dei condizionali get_first_elements_mask e drop_first_elements_mask che introducono branch decision sulla gpu
+    *D = ((*D << shift_to_apply) | (*D >> (28 - shift_to_apply))) & 0xFFFFFFF;
+    *C = ((*C << shift_to_apply) | (*C >> (28 - shift_to_apply))) & 0xFFFFFFF; 
+    // dopo l'applicazione dello shift C e D sono ricombinati in un blocco unico da 56 bit
+    // remerge
+    // uint64_t shifted_remerged = ((uint64_t)(*C) << 28) | *D; OTTIMIZZAZIONE: non alloco una variabile appositamente per questo, lo passo direttamente alla function
+    // adesso il blocco ricombinato da 56 bit viene passato ad una permutation choice PC2_TABLE
+    return permute((((uint64_t)(*C) << 28) | *D), PC2_TABLE, 48, 56); // ritorna i 48 bits necessari
 }
 
 // Rappresenta la funzione f, prende in input 32 bits (da R) e 48-bits dalla
@@ -130,16 +133,16 @@ __device__ __forceinline__ uint32_t mangler_cipher_function(uint32_t r_block, ui
     // split into eight chunks of 6-bit size each
     uint8_t chunks[8] = {0};
 
-    uint64_t temp_xored = xored_plaintext; // se xored_plaintext non e' riusato
-                                           // possiamo eliminarlo successivamente
+    // uint64_t temp_xored = xored_plaintext; // se xored_plaintext non e' riusato
+                                           // possiamo eliminarlo successivamente, OTTIMIZZAZIONE: uso direttamente xored_plaintext
 #pragma unroll
     for (int i = 7; i >= 0; i--) {                // big-endian itero al contrario
-        chunks[i] = (uint8_t)(temp_xored & 0x3F); // prendo gli ultimi 6 bit meno
+        chunks[i] = (uint8_t)(xored_plaintext & 0x3F); // prendo gli ultimi 6 bit meno
                                                   // significativi ad eccezione dei primi
                                                   // due (perche' sto operando su uint8_t)
         // spiegazione della maschera 0x3F , in binario e' 0011 1111 ovvero gli
         // ultimi 6 bit
-        temp_xored = temp_xored >> 6;
+        xored_plaintext = xored_plaintext >> 6;
     }
 
     // substitution (S_BOXES)
@@ -223,14 +226,22 @@ __device__ __forceinline__ void des_encrypt_block(const uint8_t key_bytes[8], co
     uint64_t permuted_block = permute(block64, IP_TABLE, 64, 64);
 
     // genera subkeys
-    uint64_t subkeys[16];
+    // uint64_t subkeys[16];
     // converti la chiave in int64 bits
     uint64_t key64 = 0;
 #pragma unroll
     for (int i = 0; i < 8; i++) {
         key64 = (key64 << 8) | key_bytes[i];
     }
-    generate_subkeys(key64, subkeys);
+
+    // Prima operazione: permutazione con tabella PC-1 (su geek for geeks non corrisponde con quella del NIST), produce da 64 a 56 bits
+    // Ottimizzazione applicata da me per la funzione generate_keys, invece di eseguire un altro ciclo con la generazione delle 16 chiavi eseguo tutto 
+    // nello stesso feistel cicle, quindi qui parte la generazione delle subkeys, l'inizializzazione di C e D basta sia eseguita la prima volta
+    uint64_t bit_56_key = permute(key64, PC1_TABLE, 56, 64);
+
+    // Split della chiave in 2 sottoinsiemi da 18 bits ciascuna chiamate C(primi 28 bits) e D(ultimi 28 bits)
+    uint32_t D = bit_56_key & 0xFFFFFFF; // applico maschera e prendo gli ultimi 28 bits 1111111111111111111111111111
+    uint32_t C = (bit_56_key >> 28 ) & 0xFFFFFFF; // shifto di 28 e prendo gli ultimi 28 bits2
 
     /*
         // Splitting
@@ -272,23 +283,21 @@ __device__ __forceinline__ void des_encrypt_block(const uint8_t key_bytes[8], co
                                                 // prende usa little-endian come precedenza
 
 #pragma unroll
-    for (int i = 0; i < 16; i++) { // feistel cicle, devono essere 16 round esatti non 15! bug!
-        uint32_t f_result = mangler_cipher_function(R_prev, subkeys[i]); // ritorna 32 bit
-        uint32_t R_new = L_prev ^ f_result;
-        uint32_t L_new = R_prev;
-        L_prev = L_new;
-        R_prev = R_new;
+    for (int i = 0; i < 16; i++) {
+        uint64_t current_subkey = generate_subkey(i, &D, &C);
+        uint32_t temp = R_prev; // temp serve per lo swap tra L e R
+        R_prev = L_prev ^ mangler_cipher_function(R_prev, current_subkey);
+        L_prev = temp;
     }
 
     /*
-        // alla fine dell'algoritmo, avviene un pre-output
-        After these 16 rounds we get two blocks (Left and Right) of 32-bit each.
-        The two 32-bit halves are again swapped back, resulting in a 64-bit block.
-       This step is called 32-bit Swap in DES encryption algorithm.
-        // L[16] contiene R[15] e R[16] contiene L[15] XOR f(R[15],K)
-        Il termine PREOUTPUT nello schema indica semplicemente l'unione dei 64 bit
-       formata mettendo R[16] a sinistra (bit più significativi) e L[16] a destra
-       (bit meno significativi)
+    alla fine dell'algoritmo, avviene un pre-output
+    After these 16 rounds we get two blocks (Left and Right) of 32-bit each.
+    The two 32-bit halves are again swapped back, resulting in a 64-bit block.
+    This step is called 32-bit Swap in DES encryption algorithm.
+    // L[16] contiene R[15] e R[16] contiene L[15] XOR f(R[15],K)
+    Il termine PREOUTPUT nello schema indica semplicemente l'unione dei 64 bit
+    formata mettendo R[16] a sinistra (bit più significativi) e L[16] a destra (bit meno significativi)
     */
     // 32 bits di shift sono
     uint64_t pre_output =
