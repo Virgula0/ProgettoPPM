@@ -48,23 +48,11 @@ private:
     std::vector<uint8_t> bit_array; 
 
     // restituisce k indici univoci per un dato elemento
-    std::array<size_t, K_HASHES> _hashes(const std::string& item) const {
-        std::array<size_t, K_HASHES> indices;
-        std::string salted_input;
-        size_t hash_val;
-
-    
-        for (size_t i = 0; i < K_HASHES; ++i) {
-            salted_input = std::to_string(i) + ":" + item; // crea un input unico per ogni iterazione
-
-            hash_val = std::hash<std::string>{}(salted_input);
-
-            size_t index = hash_val % size; // modulo per rientrare nel range dell'array [0, size - 1]
-            indices[i] = index;
-        }
-    
-        return indices;
-    }
+    size_t _hash_single(const std::string& item, size_t hash_idx) const {
+        size_t h1 = std::hash<std::string>{}(item);
+        size_t h2 = std::hash<size_t>{}(h1 ^ 0x9e3779b97f4a7c15ULL);
+        return (h1 + hash_idx * h2) % size;
+}
 
 public:
     // costruttore che inizializza il vettore alla dimensione desiderata con tutti bit a false
@@ -73,11 +61,12 @@ public:
 
     void add_from_file(const std::vector<std::string>& items) {
         #pragma omp parallel num_threads(omp_get_max_threads())
-        #pragma omp for schedule(dynamic)
+        #pragma omp for schedule(dynamic, 1024) collapse(2)
         for(size_t i = 0; i < items.size(); ++i){
-            for (size_t index : _hashes(items[i])) { // imposta a True tutti i bit ritornati dalla funzione _hashes
+            for (size_t j = 0; j < K_HASHES; ++j) {
+                size_t index = _hash_single(items[i], j);
                 bit_array[index] = 1;
-            }
+           }
         }
     }
 
@@ -85,7 +74,7 @@ public:
     size_t contains_from_file(const std::vector<std::string>& items) const {
         size_t count = 0;
         #pragma omp parallel num_threads(omp_get_max_threads())
-        #pragma omp for schedule(dynamic) reduction(+ : count) 
+        #pragma omp for schedule(dynamic, 1024) reduction(+ : count) 
         for (size_t i = 0; i < items.size(); ++i) {
             if (contains(items[i])) {
                 count++;
@@ -96,15 +85,13 @@ public:
 
     // verifica la presenza della password analizzando i suoi 3 bit associati
     bool contains(const std::string& item) const {
-        bool flg = true; // flag per indicare se una password è presente o meno
-        for (size_t index : _hashes(item)) {
-            // Se anche solo un bit è false, l'elemento NON è mai stato inserito
-            if (bit_array[index] == 0) {
-                flg = false;
-                break;
+        for (size_t j = 0; j < K_HASHES; ++j) {
+            size_t index = _hash_single(item, j);
+            if(bit_array[index] == 0){
+                return false;
             }
         }
-        return flg;
+        return true;
     }
 };
 
@@ -118,19 +105,10 @@ private:
     std::vector<uint8_t> bit_array;
 
     // genera k indici univoci per un dato elemento
-    std::array<size_t, K_HASHES> _hashes(const std::string& item) const {
-        std::array<size_t, K_HASHES> indices;
-
-        for (size_t i = 0; i < K_HASHES; ++i) {
-            std::string salted_input = std::to_string(i) + ":" + item; // crea un input unico per ciascuna iterazione
-
-            size_t hash_val = std::hash<std::string>{}(salted_input);
-
-            size_t index = hash_val % size; // Modulo per rientrare nel range dell'array [0, size - 1]
-            indices[i] = index;
-            
-        }
-        return indices;
+    size_t _hash_single(const std::string& item, size_t hash_idx) const {
+        size_t h1 = std::hash<std::string>{}(item);
+        size_t h2 = std::hash<size_t>{}(h1 ^ 0x9e3779b97f4a7c15ULL);
+        return (h1 + hash_idx * h2) % size;
     }
 
 public:
@@ -139,14 +117,16 @@ public:
         : size(size), bit_array(size, 0) {}
 
     void add(const std::string& item) {
-        for (size_t index : _hashes(item)) { // imposta a True i bit agli indici ritornati dalla funzione _hashes
+        for (size_t j = 0; j < K_HASHES; ++j) {
+            size_t index = _hash_single(item, j);
             bit_array[index] = 1;
         }
     }
 
     bool contains(const std::string& item) const {
-        for (size_t index : _hashes(item)) {
-            if (bit_array[index] == 0) {
+        for (size_t j = 0; j < K_HASHES; ++j) {
+            size_t index = _hash_single(item, j);
+            if(bit_array[index] == 0){
                 return false;
             }
         }
@@ -158,12 +138,12 @@ int main() {
     const std::string filename = "rockyou.txt";
     const std::string ctrl_filename = "1_million_passwords.txt";
 
-    size_t filter_size = 143443800;
+    size_t filter_size = 143443800; // più o meno 17MB
 
     std::vector<std::string> passwords;
     std::vector<std::string> ctrl_passwords;
 
-    int num_cycles = 25;
+    int num_cycles = 5;
 
     double tot_add_time_par = 0, tot_add_time_seq = 0;
 
