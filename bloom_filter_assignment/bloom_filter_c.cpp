@@ -6,8 +6,6 @@
 #include <functional> // Per std::hash
 #include <ctime>
 #include <cstdint> // Necessario per uint8_t
-#include <array>   // Necessario per std::array
-
 
 /*
 ###################################################
@@ -16,7 +14,7 @@ OMP_PLACES - non modificato
 ###################################################
 */
 
-constexpr size_t K_HASHES = 6;  // numero di funzioni hash
+constexpr size_t K_HASHES = 6; // numero di funzioni hash
 
 // funzione di supporto per caricare le password da file .txt
 std::vector<std::string> load_passwords(const std::string& filename, size_t max_lines = 0) {
@@ -32,9 +30,11 @@ std::vector<std::string> load_passwords(const std::string& filename, size_t max_
     while (std::getline(file, line)) {
         if (!line.empty()) {
             // Rimuove l'eventuale carattere '\r' da file formattati in windows
-            if (line.back() == '\r') line.pop_back();
+            if (line.back() == '\r')
+                line.pop_back();
             passwords.push_back(line);
-            if (max_lines > 0 && passwords.size() >= max_lines) break;
+            if (max_lines > 0 && passwords.size() >= max_lines)
+                break;
         }
     }
     return passwords;
@@ -42,39 +42,38 @@ std::vector<std::string> load_passwords(const std::string& filename, size_t max_
 /*####################################################################################################
     BLOOM FILTER PARALLELO
 ####################################################################################################*/
-class BloomFilterPar { 
+class BloomFilterPar {
 private:
     size_t size; // custom size del bit array
-    std::vector<uint8_t> bit_array; 
+    std::vector<uint8_t> bit_array;
 
     // restituisce k indici univoci per un dato elemento
     size_t _hash_single(const std::string& item, size_t hash_idx) const {
         size_t h1 = std::hash<std::string>{}(item);
         size_t h2 = std::hash<size_t>{}(h1 ^ 0x9e3779b97f4a7c15ULL);
         return (h1 + hash_idx * h2) % size;
-}
+    }
 
 public:
     // costruttore che inizializza il vettore alla dimensione desiderata con tutti bit a false
-    explicit BloomFilterPar(size_t size) 
-        : size(size), bit_array(size, 0) {}
+    explicit BloomFilterPar(size_t size) : size(size), bit_array(size, 0) {}
 
     void add_from_file(const std::vector<std::string>& items) {
-        #pragma omp parallel num_threads(omp_get_max_threads())
-        #pragma omp for schedule(dynamic, 1024) collapse(2)
-        for(size_t i = 0; i < items.size(); ++i){
+#pragma omp parallel num_threads(omp_get_max_threads())
+#pragma omp for schedule(dynamic, 1024) collapse(2)
+        for (size_t i = 0; i < items.size(); ++i) {
             for (size_t j = 0; j < K_HASHES; ++j) {
                 size_t index = _hash_single(items[i], j);
                 bit_array[index] = 1;
-           }
+            }
         }
     }
 
-    // ricerca di un batch di password nel Bloom Filter 
+    // ricerca di un batch di password nel Bloom Filter
     size_t contains_from_file(const std::vector<std::string>& items) const {
         size_t count = 0;
-        #pragma omp parallel num_threads(omp_get_max_threads())
-        #pragma omp for schedule(dynamic, 1024) reduction(+ : count) 
+#pragma omp parallel num_threads(omp_get_max_threads())
+#pragma omp for schedule(dynamic, 1024) reduction(+ : count)
         for (size_t i = 0; i < items.size(); ++i) {
             if (contains(items[i])) {
                 count++;
@@ -87,7 +86,7 @@ public:
     bool contains(const std::string& item) const {
         for (size_t j = 0; j < K_HASHES; ++j) {
             size_t index = _hash_single(item, j);
-            if(bit_array[index] == 0){
+            if (bit_array[index] == 0) {
                 return false;
             }
         }
@@ -99,7 +98,7 @@ public:
     BLOOM FILTER SEQUENZIALE
 ####################################################################################################*/
 
-class BloomFilterSeq { 
+class BloomFilterSeq {
 private:
     size_t size; // custom size del bit array
     std::vector<uint8_t> bit_array;
@@ -113,8 +112,7 @@ private:
 
 public:
     // costruttore che inizializza il vettore alla dimensione indicata con tutti bit a false
-    explicit BloomFilterSeq(size_t size) 
-        : size(size), bit_array(size, 0) {}
+    explicit BloomFilterSeq(size_t size) : size(size), bit_array(size, 0) {}
 
     void add(const std::string& item) {
         for (size_t j = 0; j < K_HASHES; ++j) {
@@ -126,7 +124,7 @@ public:
     bool contains(const std::string& item) const {
         for (size_t j = 0; j < K_HASHES; ++j) {
             size_t index = _hash_single(item, j);
-            if(bit_array[index] == 0){
+            if (bit_array[index] == 0) {
                 return false;
             }
         }
@@ -154,12 +152,11 @@ int main() {
     double tot_eff_add = 0, tot_eff_srch = 0;
 
     int num_threads = omp_get_max_threads();
- 
+
     std::cout << "Caricamento password da '" << filename << "'...\n";
     passwords = load_passwords(filename, 0);
 
-    if(passwords.empty())
-    {
+    if (passwords.empty()) {
         std::cout << "caricamento fallito, l'array è vuoto.";
         return 1;
     }
@@ -169,17 +166,15 @@ int main() {
     std::cout << "Caricamento password da '" << ctrl_filename << "'...\n";
     ctrl_passwords = load_passwords(ctrl_filename, 0);
 
-    if(ctrl_passwords.empty())
-    {
+    if (ctrl_passwords.empty()) {
         std::cout << "caricamento fallito, l'array di controllo è vuoto.";
         return 1;
     }
 
     std::cout << "Caricate " << ctrl_passwords.size() << " password.\n\n";
 
-    for(int i = 0; i < num_cycles; i++){
-
-        double time_add_par = 0, time_add_par_cpu = 0; 
+    for (int i = 0; i < num_cycles; i++) {
+        double time_add_par = 0, time_add_par_cpu = 0;
         double start_add_par = 0, start_srch_par = 0;
         double time_srch_par_cpu = 0, time_srch_par = 0;
 
@@ -229,7 +224,8 @@ int main() {
 
         size_t found_seq = 0;
         for (const auto& pwd : ctrl_passwords) {
-            if (bloom_seq.contains(pwd)) found_seq++;
+            if (bloom_seq.contains(pwd))
+                found_seq++;
         }
 
         time_srch_seq_cpu = double(std::clock() - start_srch_seq_cpu) / CLOCKS_PER_SEC;
@@ -262,8 +258,7 @@ int main() {
         std::cout << "Speedup Ricerca:   " << speedup_srch << "x\n";
         std::cout << "Efficiency:   " << eff_srch * 100 << "%\n\n";
 
-        std::cout << "Verifica correttezza (elementi trovati Seq vs Par): " 
-                    << found_seq << " / " << res_par << "\n\n";
+        std::cout << "Verifica correttezza (elementi trovati Seq vs Par): " << found_seq << " / " << res_par << "\n\n";
 
         tot_add_time_seq += time_add_seq;
         tot_add_time_par += time_add_par;
@@ -289,6 +284,6 @@ int main() {
     std::cout << "Tempo Medio Parallelo: " << tot_srch_time_par / num_cycles << "s \n";
     std::cout << "Speedup Medio: " << tot_speed_up_srch / num_cycles << "x \n";
     std::cout << "Effeciency Media: " << (tot_eff_srch / num_cycles) * 100 << "\n";
-    
+
     return 0;
 }
