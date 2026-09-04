@@ -273,17 +273,29 @@ int main() {
         tot_eff_srch += eff_srch;
     }
 
-    std::cout << "=== RISULTATI FINALI ADD (MEDIA) ===\n\n";
-    std::cout << "Tempo Medio Sequenziale: " << tot_add_time_seq / num_cycles << "s \n";
-    std::cout << "Tempo Medio Parallelo: " << tot_add_time_par / num_cycles << "s \n";
-    std::cout << "Speedup Medio: " << tot_speed_up_add / num_cycles << "x \n";
-    std::cout << "Effeciency Media: " << (tot_eff_add / num_cycles) * 100 << "\n";
+    // ADD – statistiche finali basate sui totali
+    double avg_seq_add = tot_add_time_seq / num_cycles;
+    double avg_par_add = tot_add_time_par / num_cycles;
+    double speedup_add_final = tot_add_time_seq / tot_add_time_par; // speedup globale
+    double eff_add_final = speedup_add_final / num_threads;
 
-    std::cout << "=== RISULTATI FINALI CONTAINS (MEDIA) ===\n\n";
-    std::cout << "Tempo Medio Sequenziale: " << tot_srch_time_seq / num_cycles << "s \n";
-    std::cout << "Tempo Medio Parallelo: " << tot_srch_time_par / num_cycles << "s \n";
-    std::cout << "Speedup Medio: " << tot_speed_up_srch / num_cycles << "x \n";
-    std::cout << "Effeciency Media: " << (tot_eff_srch / num_cycles) * 100 << "\n";
+    std::cout << "=== RISULTATI FINALI ADD ===\n\n";
+    std::cout << "Tempo Medio Sequenziale: " << avg_seq_add << " s\n";
+    std::cout << "Tempo Medio Parallelo:   " << avg_par_add << " s\n";
+    std::cout << "Speedup (totale):        " << speedup_add_final << "x\n";
+    std::cout << "Efficiency:              " << eff_add_final * 100 << "%\n\n";
+
+    // CONTAINS – statistiche finali basate sui totali
+    double avg_seq_srch = tot_srch_time_seq / num_cycles;
+    double avg_par_srch = tot_srch_time_par / num_cycles;
+    double speedup_srch_final = tot_srch_time_seq / tot_srch_time_par;
+    double eff_srch_final = speedup_srch_final / num_threads;
+
+    std::cout << "=== RISULTATI FINALI CONTAINS ===\n\n";
+    std::cout << "Tempo Medio Sequenziale: " << avg_seq_srch << " s\n";
+    std::cout << "Tempo Medio Parallelo:   " << avg_par_srch << " s\n";
+    std::cout << "Speedup (totale):        " << speedup_srch_final << "x\n";
+    std::cout << "Efficiency:              " << eff_srch_final * 100 << "%\n";
 
     return 0;
 }
