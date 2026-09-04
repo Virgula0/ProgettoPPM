@@ -3,9 +3,6 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# Binaries
-./bloom_filter_assignment/bloom_filter_test_c
-
 # C extensions
 *.so
 
@@ -221,3 +218,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 lm_hash
+bloom_filter_test_c
+rockyou.txt
