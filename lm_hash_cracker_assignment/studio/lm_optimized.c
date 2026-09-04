@@ -17,62 +17,25 @@ static EVP_CIPHER *DES_CIPHER = NULL;
 
 // ----------------- HELPERS -----------------
 
-/*
- * CONVERSIONE DA 7 BYTE (56 bit) A CHIAVE DES DA 8 BYTE (64 bit)
- *
- * Il DES richiede in ingresso 64 bit (8 byte), ma la sua sicurezza reale si
- * basa solo su 56 bit.
- *
- * Invece di calcolare la parità per l'8° bit di ogni byte (come richiede lo
- * standard teorico), questo algoritmo impacchetta i 7 byte di input e poi
- * estratti a gruppi di 7 bit, posizionandoli nei 7 bit più significativi di
- * ciascun byte di output. L'8° bit (quello meno significativo, LSB) viene
- * FORZATO A 0 tramite la maschera `& 0xFE`.
- */
 void bytes_to_des_key(const uint8_t raw_7_bytes[7], uint8_t key_out[8]) {
-  uint64_t b = 0;
+    // preparo un nuovo indirizzo a 64 bit per contenere tutti i 64 bit in una
+    // locazione sola ma b contiene solo 56 bit
+    uint64_t b = 0;
+#pragma unroll
+    for (int i = 0; i < 7; i++) {
+        b = (b << 8) | raw_7_bytes[i]; // shifto di 8 bit e concateno di volta in
+                                       // volta, easy fin qui
+    }
 
-  // FASE 1: Impacchettamento
-  // Prendiamo i 7 byte di input (7 * 8 = 56 bit) e li concateniamo
-  // in un unico registro a 64 bit `b`.
-  for (int i = 0; i < 7; i++) {
-    b = (b << 8) | raw_7_bytes[i];
-  }
-  // Ora `b` contiene i 56 bit del testo nei suoi bit da 0 a 55.
-
-  /*
-   * FASE 2: Estrazione dei gruppi da 7 bit e azzeramento dell'8° bit (LSB)
-   *
-   * Nota sulla maschera 0xFE:
-   * 0xFE in esadecimale equivale a 11111110 in binario.
-   * Applicare `& 0xFE` mantiene inalterati i primi 7 bit (da MSB a Bit 1)
-   * e FORZA SEMPRE il bit 0 (LSB) a 0.
-   */
-
-  // Prende i bit [55..49] -> li sposta in alto e azzera il bit 0
-  key_out[0] = (uint8_t)((b >> 49) & 0xFE);
-
-  // Prende i bit [48..42] -> li sposta in alto e azzera il bit 0
-  key_out[1] = (uint8_t)((b >> 42) & 0xFE);
-
-  // Prende i bit [41..35] -> li sposta in alto e azzera il bit 0
-  key_out[2] = (uint8_t)((b >> 35) & 0xFE);
-
-  // Prende i bit [34..28] -> li sposta in alto e azzera il bit 0
-  key_out[3] = (uint8_t)((b >> 28) & 0xFE);
-
-  // Prende i bit [27..21] -> li sposta in alto e azzera il bit 0
-  key_out[4] = (uint8_t)((b >> 21) & 0xFE);
-
-  // Prende i bit [20..14] -> li sposta in alto e azzera il bit 0
-  key_out[5] = (uint8_t)((b >> 14) & 0xFE);
-
-  // Prende i bit [13..7]  -> li sposta in alto e azzera il bit 0
-  key_out[6] = (uint8_t)((b >> 7) & 0xFE);
-
-  // Prende i bit [6..0]   -> li sposta a sinistra di 1 posizione e azzera il
-  // bit 0
-  key_out[7] = (uint8_t)((b << 1) & 0xFE);
+// per ogni byte droppo sempre quello in ultima posizione
+// 0XFE = 11111110, l'ultimo bit e' 0
+// il fatto e' che dobbiamo isolare 7 bit alla volta
+#pragma unroll
+    for (int i = 7; i >= 0; i--) {
+        key_out[i] = (uint8_t)((b & 0x7F) << 1); // b & 0x7F prendo gli ultimi 7 bit, posi li sposto a
+                                                 // sinistra di uno lasciando l'ultimo posto a 0
+        b = b >> 7;                              // leggo i prossimi 7 bit
+    }
 }
 
 void to_upper(char *str) {
@@ -224,7 +187,7 @@ int main(void) {
   bytes_to_des_key(null_raw, null_key);
   des_encrypt_block(null_key, MAGIC_CONSTANT, NULL_HALF_BYTES);
 
-  const char *target_password = "abc";
+  const char *target_password = "test";
   char hash_val[33];
   lm_hash(target_password, hash_val);
 
