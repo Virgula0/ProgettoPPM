@@ -3,14 +3,22 @@
 #include <fstream>
 #include <string>
 #include <omp.h>
-#include <functional> // Per std::hash
 #include <ctime>
 #include <cstdint> // Necessario per uint8_t
+#include <string.h>
+#include <atomic>
+#include <array>
+
+#include "libraries/MurmurHash3.h"
 
 /*
 ###################################################
 OMP_PROC_BIND="spread"
 OMP_PLACES - non modificato
+
+Riferimenti: 
+https://michaelschmatz.com/posts/how-to-write-a-bloom-filter-cpp/
+https://www.geeksforgeeks.org/python/bloom-filters-introduction-and-python-implementation/
 ###################################################
 */
 
@@ -39,58 +47,123 @@ std::vector<std::string> load_passwords(const std::string& filename, size_t max_
     }
     return passwords;
 }
-/*####################################################################################################
-    BLOOM FILTER PARALLELO
-####################################################################################################*/
-class BloomFilterPar {
-private:
-    size_t size; // custom size del bit array
-    std::vector<uint8_t> bit_array;
 
-    // restituisce k indici univoci per un dato elemento
-    size_t _hash_single(const std::string& item, size_t hash_idx) const {
-        size_t h1 = std::hash<std::string>{}(item);
-        size_t h2 = std::hash<size_t>{}(h1 ^ 0x9e3779b97f4a7c15ULL);
-        return (h1 + hash_idx * h2) % size;
+// classe che fornisce un template con funzioni comuni sia alla versione parallela che alla versione
+// sequenziale
+class BloomFilter {
+protected:
+    uint64_t size; // custom size del bit array
+    // std::vector<bool> bit_array; // std::vector<bool> versione spcializzata di std::vector, richiede solo un bit
+    // effettivo per elemento
+    std::vector<std::atomic<uint64_t>> bit_array; // atomic evita la race condition
+
+    // MurmurHash3 = 128 bit fast hash function
+    std::array<uint64_t, 2> _hash(const uint8_t* data, std::size_t len) const {
+        std::array<uint64_t, 2> hashValue;
+        MurmurHash3_x64_128(data, len, 0, hashValue.data());
+        return hashValue;
+    }
+
+    // implementa hashi​(x,m) = (hasha​(x) + i * hashb​(x)) % m
+    inline uint64_t _hash_single(uint8_t n, uint64_t hashA, uint64_t hashB, uint64_t filterSize) const {
+        return (hashA + n * hashB) % filterSize;
+    }
+
+    bool _searchSingle(const uint8_t* data, std::size_t len) const {
+        auto hashValues = this->_hash(data, len);
+        for (size_t n = 0; n < K_HASHES; n++) {
+            uint64_t bit_index = _hash_single(n, hashValues[0], hashValues[1],
+                                              size); // calcola l'index del bit da modificare nel bit_array
+
+            uint64_t word_index = bit_index / 64;
+            uint64_t bit_offset = bit_index % 64;
+            uint64_t maschera = 1ULL << bit_offset;
+
+            if ((bit_array[word_index].load(std::memory_order_relaxed) & maschera) ==
+                0) { // .load accedo in modo atomico alla struttura
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // non e' l'ideale parallelizzare questa, dichiarando la struttura atomic, gli accessi sarebbero comunque
+    // sequenziali
+    void _add(const uint8_t* data, std::size_t len) {
+        auto hashValues = this->_hash(data, len);
+
+        // bug nella add: piu' thread che settano i bit eventualmente lo stesso bit di un altro porta a race condition
+        // la race condition sembra innoqua perche' i bit possono essere settati solo ad 1, ma il porblema e che in c++
+        // porta ad avere undefined behaviour
+
+        for (int n = 0; n < K_HASHES; n++) {
+            uint64_t bit_index = _hash_single(n, hashValues[0], hashValues[1],
+                                              size); // calcola l'index del bit da modificare nel bit_array
+
+            uint64_t word_index =
+                    bit_index /
+                    64; // Trova la word da 64 bit, una singola word gestita dalla CPU e' 64 bit, quindi ottimizziamo
+            uint64_t bit_offset = bit_index % 64; // Trova il bit all'interno della word
+            uint64_t maschera =
+                    1ULL << bit_offset; // 1ULL semplice rappresentazione di un 1 a 64 bit: 000000 ... 000001
+            // bit_array[_hash_single(n, hashValues[0], hashValues[1], bit_array.size())] = true; // old version: race
+            // condition
+
+            // fetch_or esegue Read-Modify-Write ATOMICO hardware:
+            bit_array[word_index].fetch_or(
+                    maschera, std::memory_order_relaxed); // memory_order_relaxed non richiede barriere di memoria,
+                                                          // massima velocita' su istruzioni atomiche
+        }
     }
 
 public:
     // costruttore che inizializza il vettore alla dimensione desiderata con tutti bit a false
-    explicit BloomFilterPar(size_t size) : size(size), bit_array(size, 0) {}
+    explicit BloomFilter(size_t size) : size(size), bit_array((size + 63) / 64) {
+        for (auto& word : bit_array) {
+            word.store(0, std::memory_order_relaxed);
+        }
+    }
+
+    // Interfaccia pubblica comune per stringhe singole
+    void add(const std::string& item) {
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(item.data());
+        this->_add(data, item.size());
+    }
+
+    bool contains(const std::string& item) const {
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(item.data());
+        return this->_searchSingle(data, item.size());
+    }
+
+    virtual ~BloomFilter() = default;
+};
+
+/*####################################################################################################
+    BLOOM FILTER PARALLELO
+####################################################################################################*/
+class BloomFilterPar : public BloomFilter {
+public:
+    explicit BloomFilterPar(size_t size) : BloomFilter(size) {}
 
     void add_from_file(const std::vector<std::string>& items) {
-#pragma omp parallel num_threads(omp_get_max_threads())
-#pragma omp for schedule(dynamic, 1024) collapse(2)
-        for (size_t i = 0; i < items.size(); ++i) {
-            for (size_t j = 0; j < K_HASHES; ++j) {
-                size_t index = _hash_single(items[i], j);
-                bit_array[index] = 1;
-            }
+#pragma omp parallel for schedule(static)// schedule(dynamic, 1024) collapse(2)
+        for (size_t i = 0; i < items.size(); ++i) { // each item is a word from the dictionary
+            this->add(items[i]);
         }
     }
 
     // ricerca di un batch di password nel Bloom Filter
     size_t contains_from_file(const std::vector<std::string>& items) const {
         size_t count = 0;
-#pragma omp parallel num_threads(omp_get_max_threads())
-#pragma omp for schedule(dynamic, 1024) reduction(+ : count)
+        // schedule(static) divide l'array in blocchi ugualil, massima efficienza parallela ed evita false_sharing in
+        // _add
+#pragma omp parallel for schedule(static) reduction(+ : count) 
         for (size_t i = 0; i < items.size(); ++i) {
-            if (contains(items[i])) {
+            if (this->contains(items[i])) {
                 count++;
             }
         }
         return count;
-    }
-
-    // verifica la presenza della password analizzando i suoi 3 bit associati
-    bool contains(const std::string& item) const {
-        for (size_t j = 0; j < K_HASHES; ++j) {
-            size_t index = _hash_single(item, j);
-            if (bit_array[index] == 0) {
-                return false;
-            }
-        }
-        return true;
     }
 };
 
@@ -98,37 +171,17 @@ public:
     BLOOM FILTER SEQUENZIALE
 ####################################################################################################*/
 
-class BloomFilterSeq {
-private:
-    size_t size; // custom size del bit array
-    std::vector<uint8_t> bit_array;
-
-    // genera k indici univoci per un dato elemento
-    size_t _hash_single(const std::string& item, size_t hash_idx) const {
-        size_t h1 = std::hash<std::string>{}(item);
-        size_t h2 = std::hash<size_t>{}(h1 ^ 0x9e3779b97f4a7c15ULL);
-        return (h1 + hash_idx * h2) % size;
-    }
-
+class BloomFilterSeq : public BloomFilter {
 public:
     // costruttore che inizializza il vettore alla dimensione indicata con tutti bit a false
-    explicit BloomFilterSeq(size_t size) : size(size), bit_array(size, 0) {}
+    explicit BloomFilterSeq(size_t size) : BloomFilter(size) {}
 
     void add(const std::string& item) {
-        for (size_t j = 0; j < K_HASHES; ++j) {
-            size_t index = _hash_single(item, j);
-            bit_array[index] = 1;
-        }
+        this->BloomFilter::add(item);
     }
 
     bool contains(const std::string& item) const {
-        for (size_t j = 0; j < K_HASHES; ++j) {
-            size_t index = _hash_single(item, j);
-            if (bit_array[index] == 0) {
-                return false;
-            }
-        }
-        return true;
+        return this->BloomFilter::contains(item);
     }
 };
 
@@ -273,17 +326,29 @@ int main() {
         tot_eff_srch += eff_srch;
     }
 
-    std::cout << "=== RISULTATI FINALI ADD (MEDIA) ===\n\n";
-    std::cout << "Tempo Medio Sequenziale: " << tot_add_time_seq / num_cycles << "s \n";
-    std::cout << "Tempo Medio Parallelo: " << tot_add_time_par / num_cycles << "s \n";
-    std::cout << "Speedup Medio: " << tot_speed_up_add / num_cycles << "x \n";
-    std::cout << "Effeciency Media: " << (tot_eff_add / num_cycles) * 100 << "\n";
+    // ADD – statistiche finali basate sui totali
+    double avg_seq_add = tot_add_time_seq / num_cycles;
+    double avg_par_add = tot_add_time_par / num_cycles;
+    double speedup_add_final = tot_add_time_seq / tot_add_time_par; // speedup globale
+    double eff_add_final = speedup_add_final / num_threads;
 
-    std::cout << "=== RISULTATI FINALI CONTAINS (MEDIA) ===\n\n";
-    std::cout << "Tempo Medio Sequenziale: " << tot_srch_time_seq / num_cycles << "s \n";
-    std::cout << "Tempo Medio Parallelo: " << tot_srch_time_par / num_cycles << "s \n";
-    std::cout << "Speedup Medio: " << tot_speed_up_srch / num_cycles << "x \n";
-    std::cout << "Effeciency Media: " << (tot_eff_srch / num_cycles) * 100 << "\n";
+    std::cout << "=== RISULTATI FINALI ADD ===\n\n";
+    std::cout << "Tempo Medio Sequenziale: " << avg_seq_add << " s\n";
+    std::cout << "Tempo Medio Parallelo:   " << avg_par_add << " s\n";
+    std::cout << "Speedup (totale):        " << speedup_add_final << "x\n";
+    std::cout << "Efficiency:              " << eff_add_final * 100 << "%\n\n";
+
+    // CONTAINS – statistiche finali basate sui totali
+    double avg_seq_srch = tot_srch_time_seq / num_cycles;
+    double avg_par_srch = tot_srch_time_par / num_cycles;
+    double speedup_srch_final = tot_srch_time_seq / tot_srch_time_par;
+    double eff_srch_final = speedup_srch_final / num_threads;
+
+    std::cout << "=== RISULTATI FINALI CONTAINS ===\n\n";
+    std::cout << "Tempo Medio Sequenziale: " << avg_seq_srch << " s\n";
+    std::cout << "Tempo Medio Parallelo:   " << avg_par_srch << " s\n";
+    std::cout << "Speedup (totale):        " << speedup_srch_final << "x\n";
+    std::cout << "Efficiency:              " << eff_srch_final * 100 << "%\n";
 
     return 0;
 }
