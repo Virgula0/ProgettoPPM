@@ -1,0 +1,70 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Indentazione
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 8
+AccessModifierOffset: -4
+NamespaceIndentation: All
+IndentCaseLabels: false
+IndentPPDirectives: None
+
+# Braces stile CLion (attached, non Allman)
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: true
+
+# Puntatori e riferimenti a sinistra (int* p, non int *p)
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+DerivePointerAlignment: false
+
+# Lunghezza riga (CLion default e' 120)
+ColumnLimit: 120
+
+# Spaziatura
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpaceBeforeSquareBrackets: false
+SpacesInAngles: false
+SpaceInEmptyParentheses: false
+
+# Allineamento
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignAfterOpenBracket: Align
+AlignOperands: true
+AlignTrailingComments: true
+AlignEscapedNewlines: Right
+
+# Argomenti funzione / parametri
+AllowAllParametersOfDeclarationOnNextLine: true
+BinPackArguments: true
+BinPackParameters: true
+
+# Break dei costrutti
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerAllOnOneLineOrOnePerLine: false
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+
+# Include
+SortIncludes: false
+IncludeBlocks: Preserve
+
+# Altro
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 2
+FixNamespaceComments: true
+CompactNamespaces: false
+Standard: c++20
