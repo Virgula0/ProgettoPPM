@@ -35,7 +35,7 @@
  * 4. __shared__ (Qualificatore di Variabile / Memoria Condivisa)
  *    - Dove risiede: SRAM ad alta velocità interna allo Streaming Multiprocessor (SM)
  *    - Ambito/Visibilità: Tutti i thread appartenenti allo STESSO BLOCCO
- *    - Scopo: Cache veloce gestita dal programmatore per evitare accessi 
+ *    - Scopo: Cache veloce gestita dal programmatore per evitare accessi
  *             ripetuti e lenti alla VRAM globale (Global Memory).
  *    - Esempio:
  *        __global__ void filtro() {
@@ -60,9 +60,10 @@ __global__ void vectorAdd(const float* a, const float* b, float* c, float scalar
     size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
 
     // Controllo dei limiti dell'array (Guard Clause)
-    if (gid >= n) return;
+    if (gid >= n)
+        return;
 
-    __shared__ int test = 1; 
+    __shared__ int test = 1;
     // Corpo del calcolo eseguito in parallelo dal Warp
     c[gid] = a[gid] + scalar * b[gid];
 }

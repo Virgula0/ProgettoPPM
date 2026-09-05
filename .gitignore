@@ -218,5 +218,6 @@ __marimo__/
 .streamlit/secrets.toml
 
 lm_hash
-bloom_filter_test_c
 rockyou.txt
+lm_hash_cuda
+lm_hash_openmp
