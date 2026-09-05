@@ -3,8 +3,8 @@
 #include <fstream>
 #include <string>
 #include <omp.h>
-#include <functional> // per std::hash
-#include <ctime> // per std::clock
+#include <array>
+#include <ctime>   // per std::clock
 #include <cstdint> // per uint8_t
 #include <array>   // per std::array
 #include "library/MurmurHash3.h"
@@ -17,7 +17,7 @@ OMP_PLACES=threads
 ###################################################
 */
 
-constexpr size_t K_HASHES = 6;  // numero di funzioni hash
+constexpr size_t K_HASHES = 6; // numero di funzioni hash
 
 // funzione di supporto per caricare le password da file .txt
 std::vector<std::string> load_passwords(const std::string& filename, size_t max_lines = 0) {
@@ -33,9 +33,11 @@ std::vector<std::string> load_passwords(const std::string& filename, size_t max_
     while (std::getline(file, line)) {
         if (!line.empty()) {
             // Rimuove l'eventuale carattere '\r' da file formattati in windows
-            if (line.back() == '\r') line.pop_back();
+            if (line.back() == '\r')
+                line.pop_back();
             passwords.push_back(line);
-            if (max_lines > 0 && passwords.size() >= max_lines) break;
+            if (max_lines > 0 && passwords.size() >= max_lines)
+                break;
         }
     }
     return passwords;
@@ -63,7 +65,7 @@ protected:
 
 public:
     explicit BloomFilter(size_t size) : size(size), bit_array(size, 0) {}
-    
+
     // distruttore
     virtual ~BloomFilter() = default;
 
@@ -93,13 +95,13 @@ public:
 /*####################################################################################################
     BLOOM FILTER PARALLELO
 ####################################################################################################*/
-class BloomFilterPar : public BloomFilter{ 
+class BloomFilterPar : public BloomFilter {
 public:
-    using BloomFilter::BloomFilter; 
+    using BloomFilter::BloomFilter;
 
     void add_from_file(const std::vector<std::string>& items) override {
-        #pragma omp parallel num_threads(omp_get_max_threads())
-        #pragma omp for schedule(dynamic, 1024)
+#pragma omp parallel num_threads(omp_get_max_threads())
+#pragma omp for schedule(dynamic, 1024)
         for (size_t i = 0; i < items.size(); ++i) {
             auto [h1, h2] = _hash(reinterpret_cast<const uint8_t*>(items[i].data()), items[i].size());
             for (size_t j = 0; j < K_HASHES; ++j) {
@@ -109,11 +111,12 @@ public:
         }
     }
 
-    // ricerca di un batch di password nel Bloom Filter 
+    // ricerca di un batch di password nel Bloom Filter
     size_t contains_from_file(const std::vector<std::string>& items) const {
         size_t count = 0;
-        #pragma omp parallel num_threads(omp_get_max_threads())
-        #pragma omp for schedule(dynamic, 1024) reduction(+ : count) // reduction su count per renderla affidabile senza utilizzare sincronizzazione
+#pragma omp parallel num_threads(omp_get_max_threads())
+#pragma omp for schedule(dynamic, 1024)                                                                                \
+        reduction(+ : count) // reduction su count per renderla affidabile senza utilizzare sincronizzazione
         for (size_t i = 0; i < items.size(); ++i) {
             if (contains(items[i])) {
                 count++;
@@ -127,7 +130,7 @@ public:
     BLOOM FILTER SEQUENZIALE
 ####################################################################################################*/
 
-class BloomFilterSeq : public BloomFilter{ 
+class BloomFilterSeq : public BloomFilter {
 public:
     using BloomFilter::BloomFilter;
 
@@ -155,7 +158,8 @@ int main() {
     size_t filter_size = 143443800; // più o meno 17MB
 
     std::vector<std::string> passwords; // passwords da inserire nel dizionario
-    std::vector<std::string> ctrl_passwords; // passwords di controllo (ognuna composta da 8 caratteri alfabetici genereati casualmente)
+    std::vector<std::string>
+            ctrl_passwords; // passwords di controllo (ognuna composta da 8 caratteri alfabetici genereati casualmente)
 
     int num_cycles = 15; // numero di cicli testing
 
@@ -169,12 +173,11 @@ int main() {
     double tot_eff_add = 0, tot_eff_srch = 0;
 
     int num_threads = omp_get_max_threads();
- 
+
     std::cout << "Caricamento password da '" << filename << "'...\n";
     passwords = load_passwords(filename, 0);
 
-    if(passwords.empty())
-    {
+    if (passwords.empty()) {
         std::cout << "caricamento fallito, l'array è vuoto.";
         return 1;
     }
@@ -184,20 +187,18 @@ int main() {
     std::cout << "Caricamento password da '" << ctrl_filename << "'...\n";
     ctrl_passwords = load_passwords(ctrl_filename, 0);
 
-    if(ctrl_passwords.empty())
-    {
+    if (ctrl_passwords.empty()) {
         std::cout << "caricamento fallito, l'array di controllo è vuoto.";
         return 1;
     }
 
     std::cout << "Caricate " << ctrl_passwords.size() << " password.\n\n";
 
-    for(int i = 0; i < num_cycles; i++){
-
+    for (int i = 0; i < num_cycles; i++) {
         // ======================== PARTE PARALLELA ========================
 
         // inizializzazione variabili per la raccolta dati
-        double time_add_par = 0, time_add_par_cpu = 0; 
+        double time_add_par = 0, time_add_par_cpu = 0;
         double start_add_par = 0, start_srch_par = 0;
         double time_srch_par_cpu = 0, time_srch_par = 0;
 
@@ -281,8 +282,7 @@ int main() {
         std::cout << "Speedup Ricerca:   " << speedup_srch << "x\n";
         std::cout << "Efficiency:   " << eff_srch * 100 << "%\n\n";
 
-        std::cout << "Verifica correttezza (elementi trovati Seq vs Par): " 
-                    << res_seq << " / " << res_par << "\n\n";
+        std::cout << "Verifica correttezza (elementi trovati Seq vs Par): " << res_seq << " / " << res_par << "\n\n";
 
         tot_add_time_seq += time_add_seq;
         tot_add_time_par += time_add_par;
@@ -309,6 +309,6 @@ int main() {
     std::cout << "Tempo Medio Parallelo: " << tot_srch_time_par / num_cycles << "s \n";
     std::cout << "Speedup Medio: " << tot_speed_up_srch / num_cycles << "x \n";
     std::cout << "Effeciency Media: " << (tot_eff_srch / num_cycles) * 100 << "\n";
-    
+
     return 0;
 }

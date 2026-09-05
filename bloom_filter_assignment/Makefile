@@ -1,3 +1,3 @@
 build:
-	g++ bloom_filter_c.cpp -o bloom_filter_test_c -fopenmp
+	g++ bloom_filter_openmp.cpp library/MurmurHash3.cpp -o bloom_filter_openmp -fopenmp -O3
 .PHONY: build
