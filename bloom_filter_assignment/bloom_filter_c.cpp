@@ -86,14 +86,12 @@ public:
     }
 
     virtual bool contains(const std::string& item) const {
-        bool flg = true;
         for (size_t j = 0; j < K_HASHES; ++j) {
-            uint8_t supp = bit_array[_hash_single(item, j)];
             if (bit_array[_hash_single(item, j)] == 0) {
-                flg = false;
+                return false;
             }
         }
-        return flg;
+        return true;
     }
 
     // metodi virtuali
