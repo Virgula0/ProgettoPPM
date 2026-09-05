@@ -219,6 +219,7 @@ __marimo__/
 
 lm_hash
 bloom_filter_openmp
+bloom_filter_test
 rockyou.txt
 lm_hash_cuda
 lm_hash_openmp
