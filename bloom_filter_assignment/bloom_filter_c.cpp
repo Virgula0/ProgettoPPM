@@ -49,26 +49,15 @@ protected:
     size_t size; // dimensione del bit_array
     std::vector<uint8_t> bit_array;
 
+    // Calcola l'hash a 128 bit una sola volta e restituisce la coppia {h1, h2}
     std::array<uint64_t, 2> _hash(const uint8_t* data, std::size_t len) const {
-
         std::array<uint64_t, 2> hashValue;
-
         MurmurHash3_x64_128(data, len, 0, hashValue.data());
-
         return hashValue;
-
     }
 
-    size_t _hash_single(const std::string& item, size_t hash_idx) const {
-        // calcola l'hash a 128 bit (due uint64_t) di MurmurHash3
-        std::array<uint64_t, 2> h = _hash(reinterpret_cast<const uint8_t*>(item.data()), item.size());
-        
-        // estrai h1 e h2
-        uint64_t h1 = h[0];
-        uint64_t h2 = h[1];
-        
-        // 3. Combina h1 e h2 con l'indice desiderato (Double Hashing)
-        // Usiamo il cast a size_t per sicurezza su architetture diverse
+    // Combina h1 e h2 con l'indice (Double Hashing) restituendo solo l'indice calcolato
+    size_t _hash_single(uint64_t h1, uint64_t h2, size_t hash_idx) const {
         return static_cast<size_t>(h1 + hash_idx * h2) % size;
     }
 
@@ -80,14 +69,16 @@ public:
 
     // metodi di default
     virtual void add(const std::string& item) {
+        auto [h1, h2] = _hash(reinterpret_cast<const uint8_t*>(item.data()), item.size());
         for (size_t j = 0; j < K_HASHES; ++j) {
-            bit_array[_hash_single(item, j)] = 1;
+            bit_array[_hash_single(h1, h2, j)] = 1;
         }
     }
 
     virtual bool contains(const std::string& item) const {
+        auto [h1, h2] = _hash(reinterpret_cast<const uint8_t*>(item.data()), item.size());
         for (size_t j = 0; j < K_HASHES; ++j) {
-            if (bit_array[_hash_single(item, j)] == 0) {
+            if (bit_array[_hash_single(h1, h2, j)] == 0) {
                 return false;
             }
         }
@@ -106,14 +97,15 @@ class BloomFilterPar : public BloomFilter{
 public:
     using BloomFilter::BloomFilter; 
 
-    void add_from_file(const std::vector<std::string>& items) {
-        #pragma omp parallel num_threads(omp_get_max_threads()) // forza il compilatore ad utilizzare il numero massimo di threads
+    void add_from_file(const std::vector<std::string>& items) override {
+        #pragma omp parallel num_threads(omp_get_max_threads())
         #pragma omp for schedule(dynamic, 1024)
-        for(size_t i = 0; i < items.size(); ++i){
+        for (size_t i = 0; i < items.size(); ++i) {
+            auto [h1, h2] = _hash(reinterpret_cast<const uint8_t*>(items[i].data()), items[i].size());
             for (size_t j = 0; j < K_HASHES; ++j) {
-                size_t index = _hash_single(items[i], j);
+                size_t index = _hash_single(h1, h2, j);
                 bit_array[index] = 1;
-           }
+            }
         }
     }
 
