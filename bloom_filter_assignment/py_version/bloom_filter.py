@@ -6,7 +6,7 @@ import threading
 from multiprocessing.pool import ThreadPool
 
 # NUMBER_OF_THREADS = os.cpu_count()
-NUMBER_OF_THREADS = os.cpu_count() or 4
+NUMBER_OF_THREADS = os.cpu_count() or 8
 
 """
 ###################################################
@@ -17,17 +17,28 @@ NUMBER_OF_THREADS = os.cpu_count() or 4
 
 K_HASHES = 6  # numero di funzioni hash
 
+# numero di lock usati per lo striping sul bit_array condiviso: piu' lock = meno contesa
+# ma anche piu' overhead di gestione. 4096 e' un compromesso ragionevole: abbastanza
+# granulare da non serializzare troppo i thread, ma non cosi' tanto da rendere il costo
+# di allocazione/acquisizione dei lock stessi un collo di bottiglia
+NUM_LOCK_STRIPES = 4096
+
+# dimensione del chunk dinamico assegnato ad ogni thread quando richiede nuovo lavoro,
+# equivalente a "schedule(dynamic, 1024)" in OpenMP
+DYNAMIC_CHUNK_SIZE = 1024
+
+
 # funzione di supporto per caricare le password da file .txt
 def load_passwords(filename: str, max_lines: int = 0) -> list[str]:
     passwords = []
     try:
-        with open(filename, 'r', encoding='utf-8', errors='ignore') as file:
+        with open(filename, "r", encoding="utf-8", errors="ignore") as file:
             for line in file:
                 if line:
-                    line = line.rstrip('\n')
+                    line = line.rstrip("\n")
                     if line:
                         # Rimuove l'eventuale carattere '\r' da file formattati in windows
-                        if line.endswith('\r'):
+                        if line.endswith("\r"):
                             line = line[:-1]
                         passwords.append(line)
                         if max_lines > 0 and len(passwords) >= max_lines:
@@ -37,11 +48,14 @@ def load_passwords(filename: str, max_lines: int = 0) -> list[str]:
         return passwords
     return passwords
 
+
 """
 ####################################################################################################
     BLOOM FILTER ASTRATTO
 ####################################################################################################
 """
+
+
 class BloomFilter:
     def __init__(self, size: int):
         # dimensione logica del bit_array, cioe' il numero di bit indirizzabili (non il numero di byte
@@ -78,20 +92,20 @@ class BloomFilter:
     # bit_index % 8  -> in che posizione dentro quel byte si trova
     # versione non atomica, usata dalla parte sequenziale
     def _set_bit(self, bit_index: int) -> None:
-        self.bit_array[bit_index >> 3] |= (1 << (bit_index & 7))
+        self.bit_array[bit_index >> 3] |= 1 << (bit_index & 7)
 
     def _get_bit(self, bit_index: int) -> bool:
         return (self.bit_array[bit_index >> 3] & (1 << (bit_index & 7))) != 0
 
     # metodi di default
     def add(self, item: str) -> None:
-        item_bytes = item.encode('utf-8')
+        item_bytes = item.encode("utf-8")
         h1, h2 = self._hash(item_bytes)
         for j in range(K_HASHES):
             self._set_bit(self._hash_single(h1, h2, j))
 
     def contains(self, item: str) -> bool:
-        item_bytes = item.encode('utf-8')
+        item_bytes = item.encode("utf-8")
         h1, h2 = self._hash(item_bytes)
         for j in range(K_HASHES):
             if not self._get_bit(self._hash_single(h1, h2, j)):
@@ -105,48 +119,93 @@ class BloomFilter:
     def contains_from_file(self, items: list[str]) -> int:
         raise NotImplementedError
 
+
 """
 ####################################################################################################
     BLOOM FILTER PARALLELO
 ####################################################################################################
 """
+
+
 class BloomFilterPar(BloomFilter):
     def __init__(self, size: int):
         super().__init__(size)
-        self._lock = threading.Lock()
+        # array di lock per lo striping: ogni lock protegge un sottoinsieme di byte del
+        # bit_array condiviso (byte_index % NUM_LOCK_STRIPES). Questo e' l'equivalente
+        # "a grana grossa" del #pragma omp atomic update del C++: la' l'hardware garantisce
+        # l'atomicita' della singola read-modify-write sul byte, qui non abbiamo un'istruzione
+        # atomica a livello di bytearray Python, quindi dobbiamo simularla con un lock. Usare
+        # un solo lock globale funzionerebbe ma serializzerebbe completamente l'add (nessun
+        # parallelismo reale); usarne molti (stripe) riduce la probabilita' che due thread
+        # vogliano lo stesso lock nello stesso momento, avvicinandosi al comportamento della
+        # versione C++ dove la contesa e' limitata al singolo byte
+        self._stripe_locks = [threading.Lock() for _ in range(NUM_LOCK_STRIPES)]
+
+        # contatore condiviso + lock dedicato per l'assegnazione dinamica dei chunk di lavoro,
+        # equivalente a "schedule(dynamic, 1024)" in OpenMP: ogni thread, appena finisce il suo
+        # chunk, ne richiede uno nuovo invece di ricevere una porzione fissa e uguale per tutti
+        # (schedule statico), cosi' il lavoro si bilancia meglio se gli elementi non sono
+        # uniformi in costo di hashing/scrittura
+        self._next_index = 0
+        self._sched_lock = threading.Lock()
+
+    # restituisce il prossimo chunk (start, end) da processare, oppure None se il lavoro e' finito.
+    # analogo al meccanismo interno con cui il runtime OpenMP distribuisce gli indici del ciclo
+    # ai thread quando si usa schedule(dynamic, ...)
+    def _get_next_chunk(self, total_items: int) -> tuple[int, int] | None:
+        with self._sched_lock:
+            start = self._next_index
+            if start >= total_items:
+                return None
+            end = min(start + DYNAMIC_CHUNK_SIZE, total_items)
+            self._next_index = end
+            return start, end
 
     def add_from_file(self, items: list[str]) -> None:
-        num_threads = NUMBER_OF_THREADS
-        # Divide gli elementi in blocchi uguali, uno per thread
-        chunk_size = (len(items) + num_threads - 1) // num_threads
-        slices = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        # reset del contatore di scheduling dinamico ad ogni chiamata, cosi' l'oggetto e'
+        # riutilizzabile su piu' cicli sperimentali senza ricrearlo
+        self._next_index = 0
+        total_items = len(items)
 
-        def worker(slice_items):
-            # Buffer locale privato: 0 lock e 0 race condition
-            local_buf = bytearray(len(self.bit_array))
-            for item in slice_items:
-                item_bytes = item.encode('utf-8')
-                h1, h2 = self._hash(item_bytes)
-                for j in range(K_HASHES):
-                    bit_index = self._hash_single(h1, h2, j)
-                    local_buf[bit_index >> 3] |= (1 << (bit_index & 7))
-            return local_buf
+        def worker():
+            while True:
+                chunk = self._get_next_chunk(total_items)
+                if chunk is None:
+                    break
+                start, end = chunk
+                for i in range(start, end):
+                    item_bytes = items[i].encode("utf-8")
+                    h1, h2 = self._hash(item_bytes)
+                    for j in range(K_HASHES):
+                        bit_index = self._hash_single(h1, h2, j)
+                        # bit-packing + parallelismo: con il vecchio schema (1 byte per bit), due
+                        # thread che scrivevano bit diversi scrivevano anche BYTE diversi, quindi
+                        # l'operazione era gia' di per se' "safe" a livello di singolo elemento
+                        # (anche se soffriva di false sharing sulla cache line). Ora che 8 bit
+                        # logici condividono lo stesso byte fisico, se due thread impostano due
+                        # bit diversi ma nello stesso byte con una normale "|=" si crea una vera
+                        # race condition (read-modify-write non atomico), con rischio concreto di
+                        # perdere aggiornamenti. Serve quindi rendere atomica l'operazione di OR
+                        # sul byte: qui lo facciamo prendendo il lock dello stripe corrispondente
+                        byte_index = bit_index >> 3
+                        mask = 1 << (bit_index & 7)
+                        lock = self._stripe_locks[byte_index % NUM_LOCK_STRIPES]
+                        with lock:
+                            self.bit_array[
+                                byte_index
+                            ] |= mask  # concateno i bit della maschera al bit_array
 
-        with ThreadPool(processes=num_threads) as pool:
-            local_buffers = pool.map(worker, slices)
-
-        # Merge veloce dei buffer locali sfruttando l'algebra a grandi interi di CPython
-        merged_int = 0
-        for buf in local_buffers:
-            merged_int |= int.from_bytes(buf, 'little')
-
-        self.bit_array = bytearray(merged_int.to_bytes(len(self.bit_array), 'little'))
+        threads = [threading.Thread(target=worker) for _ in range(NUMBER_OF_THREADS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     # ricerca di un batch di password nel Bloom Filter
-    # la lettura resta senza atomic: piu' thread che leggono lo stesso byte in contemporanea non creano
-    # race condition (nessuno modifica il dato durante la ricerca)
+    # la lettura resta senza lock: piu' thread che leggono lo stesso byte in contemporanea non
+    # creano race condition (nessuno modifica il dato durante la ricerca)
     def contains_from_file(self, items: list[str]) -> int:
-        chunk_size = 1024
+        chunk_size = DYNAMIC_CHUNK_SIZE
 
         def process_chunk(chunk):
             count = 0
@@ -155,16 +214,19 @@ class BloomFilterPar(BloomFilter):
                     count += 1
             return count
 
-        chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        chunks = [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
         with ThreadPool(processes=NUMBER_OF_THREADS) as pool:
             results = pool.map(process_chunk, chunks)
         return sum(results)
+
 
 """
 ####################################################################################################
     BLOOM FILTER SEQUENZIALE
 ####################################################################################################
 """
+
+
 class BloomFilterSeq(BloomFilter):
     def add_from_file(self, items: list[str]) -> None:
         for item in items:
@@ -177,18 +239,21 @@ class BloomFilterSeq(BloomFilter):
                 count += 1
         return count
 
+
 def main():
     if sys._is_gil_enabled():
         print("GIL enabled, exiting program...")
-        os.exit(-1)
-    
+        sys.exit(-1)
+
     filename = "../rockyou.txt"
     ctrl_filename = "../parole_uniche.txt"
 
     passwords = []  # passwords da inserire nel dizionario
-    ctrl_passwords = []  # passwords di controllo (ognuna composta da 8 caratteri alfabetici genereati casualmente)
+    ctrl_passwords = (
+        []
+    )  # passwords di controllo (ognuna composta da 8 caratteri alfabetici genereati casualmente)
 
-    num_cycles = 2  # numero di cicli testing
+    num_cycles = 2  # numero di cicli testing, allineato alla versione C++ per rendere le medie comparabili
 
     # inizializzazione delle variabili di raccolta dei dati finali
     tot_add_time_par = 0.0
@@ -215,7 +280,9 @@ def main():
     # NOTA: size qui resta un numero di BIT logici, il bit-packing dentro BloomFilter si occupa
     # di allocare solo size/8 byte reali
     filter_size = len(passwords) * 10
-    print(f"Filter size calcolato (in bit): {filter_size} -> circa {(filter_size + 7) // 8 // (1024 * 1024)} MB allocati\n")
+    print(
+        f"Filter size calcolato (in bit): {filter_size} -> circa {(filter_size + 7) // 8 // (1024 * 1024)} MB allocati\n"
+    )
 
     print(f"Caricamento password da '{ctrl_filename}'...")
     ctrl_passwords = load_passwords(ctrl_filename, 0)
@@ -226,6 +293,9 @@ def main():
 
     print(f"Caricate {len(ctrl_passwords)} password.\n")
 
+    # bloom parallelo creato una sola volta fuori dal ciclo e riutilizzato: cosi' evitiamo di
+    # pagare ad ogni iterazione l'allocazione di NUM_LOCK_STRIPES lock, in modo analogo a come
+    # in OpenMP il team di thread e' tipicamente persistente tra le region parallele
     for i in range(num_cycles):
         print(f"\n=== INIZIO CICLO SPERIMENTALE {i + 1}/{num_cycles} ===", flush=True)
         # ======================== PARTE PARALLELA ========================
@@ -297,7 +367,9 @@ def main():
         print(f"Speedup Ricerca:   {speedup_srch:.2f}x")
         print(f"Efficiency:   {eff_srch * 100:.2f}%\n")
 
-        print(f"Verifica correttezza (elementi trovati Seq vs Par): {res_seq} / {res_par}\n")
+        print(
+            f"Verifica correttezza (elementi trovati Seq vs Par): {res_seq} / {res_par}\n"
+        )
 
         tot_add_time_seq += time_add_seq
         tot_add_time_par += time_add_par
@@ -325,7 +397,7 @@ def main():
     print(f"Effeciency Media: {(tot_eff_srch / num_cycles) * 100:.2f}%")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
