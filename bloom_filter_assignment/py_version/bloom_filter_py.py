@@ -182,8 +182,8 @@ def main():
         print("GIL enabled, exiting program...")
         os.exit(-1)
     
-    filename = "rockyou.txt"
-    ctrl_filename = "parole_uniche.txt"
+    filename = "../rockyou.txt"
+    ctrl_filename = "../parole_uniche.txt"
 
     passwords = []  # passwords da inserire nel dizionario
     ctrl_passwords = []  # passwords di controllo (ognuna composta da 8 caratteri alfabetici genereati casualmente)

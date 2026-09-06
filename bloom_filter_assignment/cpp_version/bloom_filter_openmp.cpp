@@ -190,8 +190,8 @@ public:
 };
 
 int main() {
-    const std::string filename = "rockyou.txt";
-    const std::string ctrl_filename = "parole_uniche.txt";
+    const std::string filename = "../rockyou.txt";
+    const std::string ctrl_filename = "../parole_uniche.txt";
 
     std::vector<std::string> passwords; // passwords da inserire nel dizionario
     std::vector<std::string>
