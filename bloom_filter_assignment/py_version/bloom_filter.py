@@ -253,7 +253,7 @@ def main():
         []
     )  # passwords di controllo (ognuna composta da 8 caratteri alfabetici genereati casualmente)
 
-    num_cycles = 2  # numero di cicli testing, allineato alla versione C++ per rendere le medie comparabili
+    num_cycles = 15  # numero di cicli testing, allineato alla versione C++ per rendere le medie comparabili
 
     # inizializzazione delle variabili di raccolta dei dati finali
     tot_add_time_par = 0.0

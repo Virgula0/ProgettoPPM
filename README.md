@@ -106,3 +106,85 @@ $$C(L) = 69^7 + 69^{L-7}, \quad \text{if } 8 \le L \le 14$$
 * **For $L > 7$:** 
   $$T_{\text{CPU}} = T_{\text{CPU}}(\text{first half at } 7 \text{ characters}) + T_{\text{CPU}}(\text{second half of length } L-7)$$
 * Throughputs for $L \ge 5$ are practically constant because time scales linearly with $C(L)$.
+
+## Parallelized Bloom Filter
+
+Bloom Filters are space-efficient data strutcures that are primarily used as a mean to check if an element is part of a set. Since it is space-efficient, it is usually used with a great volume of data (e.g during a sign in it is used to check if the given password is acceptable or not). The objective is to understand how much parallelization will help the usage of a Bloom Filter, to do this, two versions Bloom Filter will be evaluated, one coded using C++ and OpenMP for parallelization, and the other coded with Python free-threaded version (experimental verion that permit to deactivate the GIL and achive real multithreading).
+
+### How a Bloom Filter works
+
+Generally, a Bloom Filter is an array of bits (could also be a boolean or byte array) initialized to 0. To insert an element, the element first needs to be converted into indices through the use of k hash functions, returning k indices. Once converted, the positions in the bit array indicated by the indices are set to 1 (this will lose all information about the element). The check works in the same way: the element to be searched is converted into indices, and then the Bloom Filter checks whether the value stored in those positions is 1 or 0. If all positions contain 1s, the element is part of the set; otherwise, if even one 0 is present, the element is not part of the set.
+
+#### Fake Positives
+
+In a Bloom Filter there cannot be false negatives but there can be false positives, the probability of a false positive is given by:
+
+$$p = \left(1 - \left[1 - \frac{1}{m}\right]^{kn}\right)^{k}$$ or approximated $$p = \left(1 - e^{\frac{-kn}{m}}\right)^{k}$$
+
+This probability needs to be reduced to a minimum to have a good Bloom Filter.
+
+### Data used and performance evaluation variables
+
+The rockyou.txt file has been used as dictionary and parole_uniche.txt, that is formed by words not present inside rockyou.txt composed by 8 randomly chosen letters; parole_uniche.txt has been used in the "contains" operation to test if the false positives follow the theoretical probability.
+A Byte array has been utilized for the Bloom Filter using a bit packing strategy to try and mitigate bottlenecks caused by memory accesses.
+
+* rockyou.txt - 14344377 passwords - ~140MB
+* parole_uniche.txt - 999997 passwords - ~9MB
+
+The performance attributes measured for both implementations are:
+
+* Execution Time
+* Speedup = $$\frac{executionTimeSequential}{executionTimeParallel}$$
+* Efficiency = $$\frac{speedup}{numberOfThreads}$$
+
+#### C++ OpenMP results
+
+The only parallelizable parts of a Bloom Filter are the operations "add" and "contains", and so we parallelized them using pragma directives. Once obtained the parallelized version of the Bloom Filter we compare the results with the results of a sequential implementation of Bloom Filter, the results, of 15 test iterations, are:
+
+| Ciclo | Tempo Seq. ADD (s) | Tempo Par. ADD (s) | Speedup ADD | Efficiency ADD | Tempo Seq. CONTAINS (s) | Tempo Par. CONTAINS (s) | Speedup CONTAINS | Efficiency CONTAINS | Verifica (Seq/Par) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1.75601 | 0.764264 | 2.29765x | 28.7206% | 0.105339 | 0.0245089 | 4.29799x | 53.7249% | 8433 / 8433 |
+| 2 | 1.76394 | 0.757237 | 2.32945x | 29.1181% | 0.116195 | 0.0245146 | 4.73984x | 59.2479% | 8433 / 8433 |
+| 3 | 1.71722 | 0.746605 | 2.30004x | 28.7505% | 0.105972 | 0.0226688 | 4.6748x | 58.435% | 8433 / 8433 |
+| 4 | 1.82079 | 0.76255 | 2.38776x | 29.8471% | 0.105332 | 0.0278888 | 3.77687x | 47.2109% | 8433 / 8433 |
+| 5 | 1.74755 | 0.732118 | 2.38698x | 29.8372% | 0.105239 | 0.0227223 | 4.63153x | 57.8942% | 8433 / 8433 |
+| 6 | 1.7584 | 0.732195 | 2.40155x | 30.0194% | 0.105167 | 0.0226926 | 4.63442x | 57.9302% | 8433 / 8433 |
+| 7 | 1.75991 | 0.732689 | 2.40199x | 30.0249% | 0.105886 | 0.0238899 | 4.43227x | 55.4034% | 8433 / 8433 |
+| 8 | 1.7578 | 0.732345 | 2.40024x | 30.0029% | 0.105518 | 0.0226658 | 4.6554x | 58.1925% | 8433 / 8433 |
+
+| Operazione | Tempo Medio Sequenziale (s) | Tempo Medio Parallelo (s) | Speedup Medio | Efficiency Media |
+|---|---|---|---|---|
+| ADD | 1.76491 | 0.741147 | 2.38184x | 29.7731% |
+| CONTAINS | 0.106123 | 0.0238917 | 4.47243x | 55.9054% |
+
+A notable speedup is reached parallelizing "contains" with an acceptable level of efficiency, while for "add" the speedup and efficiency are worse. This is caused by the bit packing technique that requires and atomic operation for writing in the byte array.
+
+#### Python free-threaded results
+
+Same as the C++ OpenMP implementation, the parallelizable parts are the operations "add" and "contains". The parallelization has been obtained using Python native threads with the standard library module 'multiprocessing.pool.ThreadPool'.
+
+| Ciclo | Tempo Seq. ADD (s) | Tempo Par. ADD (s) | Speedup ADD | Efficiency ADD | Tempo Seq. CONTAINS (s) | Tempo Par. CONTAINS (s) | Speedup CONTAINS | Efficiency CONTAINS | Verifica (Seq/Par) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 84.850860 | 90.787828 | 0.93x | 11.68% | 2.698682 | 1.393695 | 1.94x | 24.20% | 8539 / 8539 |
+| 2 | 84.873115 | 92.670817 | 0.92x | 11.45% | 2.676591 | 1.157674 | 2.31x | 28.90% | 8539 / 8539 |
+| 3 | 85.201686 | 75.509156 | 1.13x | 14.10% | 2.657308 | 1.071891 | 2.48x | 30.99% | 8539 / 8539 |
+| 4 | 84.833558 | 72.810213 | 1.17x | 14.56% | 2.662760 | 1.038046 | 2.57x | 32.06% | 8539 / 8539 |
+| 5 | 84.503808 | 72.435889 | 1.17x | 14.58% | 2.667830 | 1.078548 | 2.47x | 30.92% | 8539 / 8539 |
+| 6 | 85.490919 | 91.068162 | 0.94x | 11.73% | 2.689181 | 1.186147 | 2.27x | 28.34% | 8539 / 8539 |
+| 7 | 84.756644 | 98.812774 | 0.86x | 10.72% | 2.660590 | 1.048506 | 2.54x | 31.72% | 8539 / 8539 |
+| 8 | 85.274003 | 90.334019 | 0.94x | 11.80% | 2.680425 | 1.074056 | 2.50x | 31.20% | 8539 / 8539 |
+| 9 | 85.031182 | 85.598837 | 0.99x | 12.42% | 2.650066 | 1.061549 | 2.50x | 31.21% | 8539 / 8539 |
+| 10 | 85.119402 | 73.845148 | 1.15x | 14.41% | 2.668620 | 1.124635 | 2.37x | 29.66% | 8539 / 8539 |
+| 11 | 84.829701 | 71.654528 | 1.18x | 14.80% | 2.661025 | 0.986704 | 2.70x | 33.71% | 8539 / 8539 |
+| 12 | 84.978749 | 72.504815 | 1.17x | 14.65% | 2.657608 | 1.044585 | 2.54x | 31.80% | 8539 / 8539 |
+| 13 | 85.251395 | 90.167100 | 0.95x | 11.82% | 2.678232 | 1.150026 | 2.33x | 29.11% | 8539 / 8539 |
+| 14 | 85.026555 | 88.767542 | 0.96x | 11.97% | 2.674827 | 1.132737 | 2.36x | 29.52% | 8539 / 8539 |
+| 15 | 84.867235 | 90.416265 | 0.94x | 11.73% | 2.660707 | 0.960535 | 2.77x | 34.63% | 8539 / 8539 |
+
+| Operazione | Tempo Medio Sequenziale (s) | Tempo Medio Parallelo (s) | Speedup Medio | Efficiency Media |
+|---|---|---|---|---|
+| ADD | 84.992587 | 83.825540 | 1.03x | 12.83% |
+| CONTAINS | 2.669630 | 1.100622 | 2.44x | 30.53% |
+
+HHere the only speedup has been obtained in the "contains" operation, with a difference of 1.56s between the sequential and parallel execution.
+The "add" operation, on the other hand, practically equal in execution time with the parallel implementation, having a 1x speedup with very poor efficiency. This is caused not only by the use of locks to write in the byte array, but also by the use of locks in the dynamic assignment of data chunks to be processed and by the intrinsic overhead caused by Python itself.
