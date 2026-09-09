@@ -253,13 +253,6 @@ __host__ void splitHash(const char* hash_hex, uint8_t target1[8], uint8_t target
     hex_to_bytes(hash_hex + 16, target2, 8);
 }
 
-__host__ bool checkIfFound(unsigned int* foundFlag1, unsigned int* foundFlag2, unsigned int* h_flag1,
-                           unsigned int* h_flag2) {
-    cudaMemcpy(h_flag1, foundFlag1, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_flag2, foundFlag2, sizeof(int), cudaMemcpyDeviceToHost);
-    return (*h_flag1 == 1) && (*h_flag2 == 1);
-}
-
 /*
 __global__ void testDES(uint8_t* output) {
     // Simula la chiave per "TEST" (7 byte: T,E,S,T,0,0,0)
@@ -302,9 +295,131 @@ __host__ char* text_to_hex_str(const char* text_in, size_t text_len) {
 }
 
 __host__ double elapsed_seconds(struct timespec start, struct timespec end) {
-    // calcola il wall-clock time, CPU + GPU overhead, tempo reale ed effetttivo impiegato 
+    // calcola il wall-clock time, CPU + GPU overhead, tempo reale ed effetttivo impiegato
     // dall'algoritmo senza trucchi
     return (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+}
+
+__host__ bool checkIfFound(unsigned int* foundFlag1, unsigned int* foundFlag2, unsigned int* h_flag1,
+                           unsigned int* h_flag2) {
+    if (*h_flag1 == 0) {
+        cudaMemcpy(h_flag1, foundFlag1, sizeof(int), cudaMemcpyDeviceToHost);
+    }
+    if (*h_flag2 == 0) {
+        cudaMemcpy(h_flag2, foundFlag2, sizeof(int), cudaMemcpyDeviceToHost);
+    }
+    return (*h_flag1 == 1) && (*h_flag2 == 1);
+}
+
+__host__ void run(uint64_t maxGridDimX, uint64_t threadsPerBlock, uint8_t* target1GPU, uint8_t* target2GPU,
+                  char* crackedPassword1GPU, char* crackedPassword2GPU, unsigned int* foundFlag1,
+                  unsigned int* foundFlag2, unsigned int* h_flag1, unsigned int* h_flag2, bool nvmlReady,
+                  nvmlDevice_t nvmlDevice, struct timespec startTime) {
+    if (!target1GPU || !target2GPU || !crackedPassword1GPU || !crackedPassword2GPU || !foundFlag1 || !foundFlag2 ||
+        !h_flag1 || !h_flag2) {
+        printf("[ERROR] Null pointer detected in run init\n");
+        return;
+    }
+
+    // inizio bruteforce len per len fino a 7, gli stream della GPU calcoleranno
+    // propriamente i candidate di thread in thread Calcolo combinazioni totali
+    // per questa specifica lunghezza (69^len), le prime lunghezze sono banali
+    // perche' 68 e 4671 vengono sparate in un solo colpo Eseguito ancora su CPU,
+    // fino a 7 perche' puo' essere massimo fino a 7 caratteri
+    for (unsigned int len = 1; len <= 7; len++) {
+        uint64_t totalCombinations = 1;
+
+        for (unsigned int i = 0; i < len; i++) {
+            totalCombinations *= HOST_CHARSET_SIZE;
+        }
+
+        printf("[DEBUG] Raggiunta lunghezza %u, combinazioni totali da testare %lu\n", len, totalCombinations);
+
+        // Calcola la dimensione del chunk: quanti thread per lancio (blocchi *
+        // threadsPerBlock) Utilizza il maxGridDimX per non superare il limite
+        // hardware
+        // uint64_t maxBlocksPerLaunch = (uint64_t)maxGridDimX; // già ottenuto prima del for
+        uint64_t chunkSize = maxGridDimX * threadsPerBlock; // (uint64_t) threadsPerBlock;
+
+        // Se il chunkSize supera totalCombinations, usa totalCombinations (per le
+        // prime len e' molto utile)
+        if (chunkSize > totalCombinations) {
+            chunkSize = totalCombinations;
+        }
+
+        // Calcola il numero totale di chunk necessari (arrotondato per eccesso)
+        uint64_t totalChunks = (totalCombinations + chunkSize - 1) / chunkSize;
+
+        uint64_t start = 0;
+        uint64_t chunkIndex = 0;
+
+        // ciclo while per dividere il lavoro al di sotto delle dimensioni massime
+        // del blocco supportato dalla gpu
+        while (start < totalCombinations) {
+            uint64_t remaining = totalCombinations - start;
+            uint64_t workThisLaunch = (remaining < chunkSize) ? remaining : chunkSize;
+            uint64_t blocks = (workThisLaunch + threadsPerBlock - 1) / threadsPerBlock;
+
+            if (blocks == 0) {
+                blocks = 1;
+            }
+
+            printf("[DEBUG] Lunghezza: %u, eseguendo blocco %lu di %lu (start=%lu, "
+                   "work=%lu)\n",
+                   len, chunkIndex + 1, totalChunks, start, workThisLaunch);
+
+            if (*h_flag1 == 0) {
+                crackHalfKernel<<<blocks, threadsPerBlock>>>(target1GPU, crackedPassword1GPU, start, totalCombinations,
+                                                             len, foundFlag1); // non bloccante, lancia kernel1
+
+                cudaError_t launchErr = cudaGetLastError();
+                if (launchErr != cudaSuccess) {
+                    printf("[ERR] Errore di lancio del kernel: %s\n", cudaGetErrorString(launchErr));
+                }
+            }
+
+            if (*h_flag2 == 0) {
+                crackHalfKernel<<<blocks, threadsPerBlock>>>(target2GPU, crackedPassword2GPU, start, totalCombinations,
+                                                             len, foundFlag2); // non bloccante accoda esecuzione stream se kernel1 e' in esecuzione, verra' eseguito quando kernel1 terminera' 
+                cudaError_t launchErr = cudaGetLastError();
+                if (launchErr != cudaSuccess) {
+                    printf("[ERR] Errore di lancio del kernel: %s\n", cudaGetErrorString(launchErr));
+                }
+            }
+
+            cudaError_t err = cudaDeviceSynchronize(); // attende terminazione di kernel1 e kernel2
+            if (err != cudaSuccess) {
+                printf("[ERROR] CUDA Error: %s\n", cudaGetErrorString(err));
+            }
+
+            if (nvmlReady) {
+                printGPUStats(nvmlDevice);
+            }
+
+            // Verifica lo stato del cracking sulla CPU
+            if (checkIfFound(foundFlag1, foundFlag2, h_flag1, h_flag2)) {
+                break;
+            }
+
+            start += workThisLaunch;
+            chunkIndex++;
+        }
+
+        // Verifica lo stato del cracking sulla CPU
+        if (*h_flag1 && *h_flag2) {
+            return;
+        }
+
+        printf("[DEBUG] Crackata prima meta'? [%d]. Crackata seconda meta'? [%d] "
+               "(0 = no, 1 = si)\n",
+               *h_flag1, *h_flag2);
+
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        printf("[DEBUG] Elapsed %.4f seconds\n", elapsed_seconds(startTime, now));
+    }
+
+    return;
 }
 
 int main(int argc, char** argv) {
@@ -408,136 +523,33 @@ int main(int argc, char** argv) {
            maxGridDimX);
     printf("[Debug] "
            "================================================================== \n");
-    cudaStream_t stream1,
-            stream2; // 2 stream uno per ogni meta' di hash viene gestito in
-                     // automatico dalla gpu, molto comodo
-    cudaStreamCreate(&stream1);
-    cudaStreamCreate(&stream2);
 
-    struct timespec startTime, endTime;
-    clock_gettime(CLOCK_MONOTONIC, &startTime); // CLOCK_MONOTONIC  non e' soggetto al datetime locale, tempo puro
     nvmlDevice_t nvmlDevice;
     bool nvmlReady = initNVML(&nvmlDevice);
 
-    // inizio bruteforce len per len fino a 7, gli stream della GPU calcoleranno
-    // propriamente i candidate di thread in thread Calcolo combinazioni totali
-    // per questa specifica lunghezza (69^len), le prime lunghezze sono banali
-    // perche' 68 e 4671 vengono sparate in un solo colpo Eseguito ancora su CPU,
-    // fino a 7 perche' puo' essere massimo fino a 7 caratteri
-    for (unsigned int len = 1; len <= 7; len++) {
-        uint64_t totalCombinations = 1;
+    // split toCrack in two printable char arrays
+    size_t total_len = strlen(toCrack);
+    size_t half_len = total_len / 2;
+    char firstPrintableHalfHash[half_len + 1];
+    char secondPrintableHalfHash[half_len + 1];
+    snprintf(firstPrintableHalfHash, sizeof(firstPrintableHalfHash), "%.*s", (int)half_len, toCrack);
+    snprintf(secondPrintableHalfHash, sizeof(secondPrintableHalfHash), "%s", toCrack + half_len);
 
-        for (unsigned int i = 0; i < len; i++) {
-            totalCombinations *= HOST_CHARSET_SIZE;
-        }
+    // --------- INIZIO TIMING ---------
 
-        printf("[DEBUG] Raggiunta lunghezza %u, combinazioni totali da testare %lu\n", len, totalCombinations);
+    struct timespec startTime, endTime;
+    clock_gettime(CLOCK_MONOTONIC, &startTime); // CLOCK_MONOTONIC  non e' soggetto al datetime locale, tempo puro
 
-        // Calcola la dimensione del chunk: quanti thread per lancio (blocchi *
-        // threadsPerBlock) Utilizza il maxGridDimX per non superare il limite
-        // hardware
-        uint64_t maxBlocksPerLaunch = (uint64_t)maxGridDimX; // già ottenuto prima del for
-        uint64_t chunkSize = maxBlocksPerLaunch * (uint64_t)threadsPerBlock;
-
-        // Se il chunkSize supera totalCombinations, usa totalCombinations (per le
-        // prime len e' molto utile)
-        if (chunkSize > totalCombinations) {
-            chunkSize = totalCombinations;
-        }
-
-        // Calcola il numero totale di chunk necessari (arrotondato per eccesso)
-        uint64_t totalChunks = (totalCombinations + chunkSize - 1) / chunkSize;
-
-        uint64_t start = 0;
-        uint64_t chunkIndex = 0;
-
-        // ciclo while per dividere il lavoro al di sotto delle dimensioni massime
-        // del blocco supportato dalla gpu
-        while (start < totalCombinations) {
-            uint64_t remaining = totalCombinations - start;
-            uint64_t workThisLaunch = (remaining < chunkSize) ? remaining : chunkSize;
-            uint64_t blocks = (workThisLaunch + threadsPerBlock - 1) / threadsPerBlock;
-
-            if (blocks == 0) {
-                blocks = 1;
-            }
-
-            printf("[DEBUG] Lunghezza: %u, eseguendo blocco %lu di %lu (start=%lu, "
-                   "work=%lu)\n",
-                   len, chunkIndex + 1, totalChunks, start, workThisLaunch);
-
-            // Se la prima metà dell'hash non è ancora stata trovata, esegui il kernel
-            if (h_flag1 == 0) {
-                // Lancio dei kernel riutilizzando gli STESSI stream
-                crackHalfKernel<<<blocks, threadsPerBlock, 0, stream1>>>(target1GPU, crackedPassword1GPU, start,
-                                                                         totalCombinations, len, foundFlag1);
-
-                cudaError_t launchErr = cudaGetLastError();
-                if (launchErr != cudaSuccess) {
-                    printf("[ERR] Errore di lancio del kernel: %s\n", cudaGetErrorString(launchErr));
-                }
-            }
-
-            // Se la seconda metà dell'hash non è ancora stata trovata, esegui il
-            // kernel
-            if (h_flag2 == 0) {
-                crackHalfKernel<<<blocks, threadsPerBlock, 0, stream2>>>(target2GPU, crackedPassword2GPU, start,
-                                                                         totalCombinations, len, foundFlag2);
-
-                cudaError_t launchErr = cudaGetLastError();
-                if (launchErr != cudaSuccess) {
-                    printf("[ERR] Errore di lancio del kernel: %s\n", cudaGetErrorString(launchErr));
-                }
-            }
-
-            // Sincronizzazione per controllare se la password è stata trovata in
-            // questa 'len'
-            cudaError_t syncErr = cudaStreamSynchronize(stream1);
-            if (syncErr != cudaSuccess) {
-                printf("[ERR] Errore durante l'esecuzione sulla GPU: %s\n", cudaGetErrorString(syncErr));
-            }
-
-            syncErr = cudaStreamSynchronize(stream2);
-            if (syncErr != cudaSuccess) {
-                printf("[ERR] Errore durante l'esecuzione sulla GPU: %s\n", cudaGetErrorString(syncErr));
-            }
-
-            if (nvmlReady) {
-                printGPUStats(nvmlDevice);
-            }
-
-            // Verifica lo stato sulla CPU
-            if (checkIfFound(foundFlag1, foundFlag2, &h_flag1, &h_flag2)) {
-                break;
-            }
-
-            start += workThisLaunch;
-            chunkIndex++;
-        }
-
-        if (h_flag1 && h_flag2) { // recheck
-            break;
-        }
-
-        printf("[DEBUG] Crackata prima meta'? [%d]. Crackata seconda meta'? [%d] "
-               "(0 = no, 1 = si)\n",
-               h_flag1, h_flag2);
-
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        printf("[DEBUG] Elapsed %.4f seconds\n", elapsed_seconds(startTime, now));
-    }
-
+    run((uint64_t)maxGridDimX, (uint64_t)threadsPerBlock, target1GPU, target2GPU, crackedPassword1GPU,
+        crackedPassword2GPU, foundFlag1, foundFlag2, &h_flag1, &h_flag2, nvmlReady, nvmlDevice, startTime);
     // Time taken
     clock_gettime(CLOCK_MONOTONIC, &endTime);
+
+    // --------- END TIMING ---------
 
     if (nvmlReady) {
         nvmlShutdown();
     }
-
-    // Pulizia stream
-    cudaStreamDestroy(stream1);
-    cudaStreamDestroy(stream2);
 
     if (!h_flag1 && !h_flag2) {
         printf("ERROR: PASSWORD NOT FOUND\n");
