@@ -86,32 +86,6 @@ void hash_half_fast(const char* candidate, uint8_t output_block[8]) {
     des_encrypt_block(key_bytes, MAGIC_CONSTANT, output_block);
 }
 
-void lm_hash(const char* password, char out_hex[33]) {
-    uint8_t padded_pw[14] = {0};
-    size_t len = strlen(password);
-
-    for (size_t i = 0; i < len && i < 14; i++) {
-        char c = password[i];
-        if (c >= 'a' && c <= 'z')
-            c -= 32;
-        padded_pw[i] = (uint8_t)c;
-    }
-
-    uint8_t key1[8], key2[8];
-    bytes_to_des_key(padded_pw, key1);
-    bytes_to_des_key(padded_pw + 7, key2);
-
-    uint8_t block1[8], block2[8];
-    des_encrypt_block(key1, MAGIC_CONSTANT, block1);
-    des_encrypt_block(key2, MAGIC_CONSTANT, block2);
-
-    for (int i = 0; i < 8; i++)
-        sprintf(out_hex + (i * 2), "%02X", block1[i]);
-    for (int i = 0; i < 8; i++)
-        sprintf(out_hex + 16 + (i * 2), "%02X", block2[i]);
-    out_hex[32] = '\0';
-}
-
 // ----------------- BRUTE FORCE ENGINE -----------------
 
 int build_combo_dfs(char* current, int depth, int target_depth, const uint8_t target_bytes[8], char* found_match,
