@@ -1,5 +1,5 @@
 # ProgettoPPM
-Parallel Programming Project: LM cracker (DES based old hash GPU pure bruteforcer) + Parallelized Bloom Filter with OpenMP and Asyncio
+Parallel Programming Project: LM cracker (DES based old hash GPU pure bruteforcer and OpenMP CPU Version) + Parallelized Bloom Filter with OpenMP and Python Threadpooling
 
 ## LM Hash Cracker
 
@@ -54,7 +54,7 @@ This is free software; see the source for copying conditions.  There is NO
 warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 ```
 
-If `1.233` hours for a full 14 byte character long password in the worst case seems a lot, just think that the total combinations to be computed are composed of the two halves split and summed together, so the total combination amounts to: (69^7 = ~7.5 trillion) * 2 = __~15 trillion passwords in total__, considering the 69-character charset used. Of course this is for educational purposes, and on the same hardware, providing the hash to `Hashcat` cuts down the computational time to about `~15 minutes` to test all __~15 trillion passwords__, reaching `~16.6 Giga Hashes per second`. This is due to advanced optimisation techniques provided by Hashcat kernels, such as `Bit Slicing`, etc., which are out of scope for this project.
+If `4.3` hours for a full 14 byte character long password in the worst case seems a lot, just think that the total combinations to be computed are composed of the two halves split and summed together, so the total combination amounts to: (69^7 = ~7.5 trillion) * 2 = __~15 trillion passwords in total__, considering the 69-character charset used. Of course this is for educational purposes, and on the same hardware, providing the hash to `Hashcat` cuts down the computational time to about `~15 minutes` to test all __~15 trillion passwords__, reaching `~30 Giga Hashes per second`. This is due to advanced optimisation techniques provided by Hashcat kernels, such as `Bit Slicing`, etc., which are out of scope for this project.
 
 | N | Plaintext | Hash | CUDA time | OPENMP time | GPU Throughput | CPU Throughput | Speedup | Time Saved (%) |
 |---|-----------|------|-----------|-------------|----------------|----------------|---------|----------------|
