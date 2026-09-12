@@ -1,6 +1,13 @@
 # ProgettoPPM
 Parallel Programming Project: LM cracker (DES based old hash GPU pure bruteforcer and OpenMP CPU Version) + Parallelized Bloom Filter with OpenMP and Python Threadpooling
 
+## Report
+
+Report availble in `pdf` and `latex`:
+
+- [Latex](./relazione.latex)
+- [PDF](./relazione.pdf)
+
 ## LM Hash Cracker
 
 LM is a very old hash algorithm based on DES (NIST fips46-3 version).
